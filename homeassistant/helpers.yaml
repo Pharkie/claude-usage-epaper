@@ -5,3 +5,9 @@ input_text:
   claude_oauth_bearer:
     name: Claude OAuth Bearer
     max: 255
+
+# The token is a live credential. Keep it out of the recorder DB/history/backups:
+# recorder:
+#   exclude:
+#     entities:
+#       - input_text.claude_oauth_bearer

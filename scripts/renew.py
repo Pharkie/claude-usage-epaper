@@ -23,7 +23,8 @@ try:
                          "client_id": CLIENT_ID}).encode(),
         headers={"Content-Type": "application/json", "User-Agent": UA,
                  "anthropic-beta": "oauth-2025-04-20"})
-    with urllib.request.urlopen(req, timeout=60) as r:
+    # under HA's 60s shell_command kill, so we fail cleanly first
+    with urllib.request.urlopen(req, timeout=30) as r:
         new = json.load(r)
     if "access_token" not in new or "refresh_token" not in new:
         print(f"FAILED: incomplete refresh response {sorted(new.keys())}")

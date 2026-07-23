@@ -13,7 +13,7 @@ Why this works (learned the hard way):
   with a fake-looking User-Agent. That 429 is bot defence, not a rate limit -
   the UA below matches the real Claude Code CLI format.
 """
-import base64, hashlib, json, os, secrets, urllib.parse, urllib.request
+import base64, hashlib, json, os, secrets, sys, urllib.parse, urllib.request, urllib.error
 
 CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"  # Claude Code's public OAuth client
 REDIRECT = "https://platform.claude.com/oauth/code/callback"
@@ -31,7 +31,11 @@ url = "https://claude.ai/oauth/authorize?" + urllib.parse.urlencode({
 })
 print("\n1) Open this URL, sign in if asked, click Authorize:\n\n" + url)
 code_state = input("\n2) Paste the code shown (code#state): ").strip()
-code = code_state.split("#")[0]
+parts = code_state.split("#")
+code = parts[0]
+returned_state = parts[1] if len(parts) > 1 else ""
+if returned_state and returned_state != state:
+    sys.exit("State mismatch, paste the code from the URL this script printed.")
 
 req = urllib.request.Request(
     "https://platform.claude.com/v1/oauth/token",
@@ -43,8 +47,21 @@ req = urllib.request.Request(
     }).encode(),
     headers={"Content-Type": "application/json", "User-Agent": UA,
              "anthropic-beta": "oauth-2025-04-20"})
-with urllib.request.urlopen(req, timeout=120) as r:
-    tok = json.load(r)
+try:
+    with urllib.request.urlopen(req, timeout=120) as r:
+        tok = json.load(r)
+except urllib.error.HTTPError as e:
+    print(f"HTTP {e.code}:", e.read().decode())
+    if e.code == 400:
+        print("The code was wrong, expired, or already used. "
+              "Re-run and paste a fresh code quickly.")
+    elif e.code == 429:
+        print("This is the User-Agent bot filter, not real rate limiting. "
+              "Check the UA constant, don't wait.")
+    sys.exit(1)
+
+if "access_token" not in tok or "refresh_token" not in tok:
+    sys.exit(f"Response missing access_token/refresh_token; got keys {sorted(tok.keys())}")
 
 days = tok.get("expires_in", 0) / 86400
 out = os.path.expanduser("~/claude_usage_token.json")

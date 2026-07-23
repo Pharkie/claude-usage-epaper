@@ -1,13 +1,13 @@
 # Claude Code usage on a 2.9" e-paper display (ESPHome + Home Assistant)
 # Shows Session / Weekly all-models / Weekly per-model (e.g. Fable) usage bars
 # with reset times, on a FireBeetle 2 ESP32-C6 + Waveshare 2.90" V2 (B/W) panel.
-# Setup instructions: see README.md in this gist.
+# Setup instructions: see README.md in the repo.
 #
 # Mains-powered: no deep sleep. Redraws ONLY when displayed data changes
-# (checked every 60s), plus a 30-min safety refresh, so the full-refresh
+# (checked every 60s), plus an occasional safety refresh, so the full-refresh
 # flash happens when a % ticks, not every 5 minutes.
 # Data comes from Home Assistant REST sensors polling
-# https://api.anthropic.com/api/oauth/usage (see NOTES.md).
+# https://api.anthropic.com/api/oauth/usage (see README.md).
 #
 # Author: Adam Knowles
 
@@ -49,7 +49,7 @@ web_server:
   port: 80
 
 logger:
-  # DEBUG causes a compile error with the Waveshare ePaper, as of 26May25?
+  # Keep at INFO: DEBUG level triggers a compile error with the Waveshare ePaper component.
   level: INFO
   baud_rate: 115200
 
@@ -61,8 +61,8 @@ wifi:
   fast_connect: true
   power_save_mode: none
 
-# Same api encryption key and ota password as the previous (gold) firmware so
-# the already-adopted device reconnects to HA and accepts OTA without re-provisioning.
+# Reuse your existing API encryption key and OTA password if the device is already
+# adopted in HA, so it reconnects and accepts OTA without re-provisioning.
 api:
   encryption:
     key: !secret api_encryption_key   # generate: openssl rand -base64 32
@@ -187,8 +187,8 @@ script:
                 id(last_boot_time).publish_state(boot_time);
 
 interval:
-  # Redraw only when displayed content changed (values, reset times, HA link,
-  # battery bucket). Checked every 60s => worst-case 60s lag, zero needless flash.
+  # Redraw only when displayed content changed (values, reset times, status,
+  # HA link). Checked every 60s => worst-case 60s lag, zero needless flash.
   - interval: 60s
     then:
       - lambda: |-
@@ -198,21 +198,19 @@ interval:
           auto pct_of = [](esphome::sensor::Sensor *s) -> int {
             return (s->has_state() && !isnan(s->state)) ? (int)(s->state + 0.5f) : -1;
           };
-          int batt_bucket = (id(batt_percentage).has_state() &&
-                             !isnan(id(batt_percentage).state))
-                            ? (int)(id(batt_percentage).state / 10) : -1;
-          snprintf(sig, sizeof(sig), "%d|%d|%d|%s|%s|%s|%s|%d|%d",
+          snprintf(sig, sizeof(sig), "%d|%d|%d|%s|%s|%s|%s|%d",
                    pct_of(id(session_pct)), pct_of(id(week_pct)), pct_of(id(fable_pct)),
                    id(session_reset).state.c_str(), id(week_reset).state.c_str(),
                    id(fable_reset).state.c_str(), id(usage_status).state.c_str(),
-                   id(api_status).is_connected() ? 1 : 0, batt_bucket);
+                   id(api_status).is_connected() ? 1 : 0);
           if (id(drawn_sig) != sig) {
             ESP_LOGI("display", "Content changed, redrawing (%s)", sig);
             id(drawn_sig) = sig;
             id(update_screen).execute();
           }
-  # Safety refresh: keeps the Updated stamp honest and clears any ghosting.
-  - interval: 30min
+  # Occasional anti-ghost/liveness refresh only (full_update_every:1 already
+  # clears ghosting on each redraw); also keeps the Updated stamp honest.
+  - interval: 6h
     then:
       - script.execute: update_screen
 
@@ -250,16 +248,13 @@ sensor:
     id: batt_voltage
     pin: 0
     accuracy_decimals: 2
-    update_interval: 30s
+    update_interval: 300s
     samples: 5
     filters:
       - multiply: 2.0
       - sliding_window_moving_average:
           window_size: 3
           send_every: 1
-    on_value:
-      then:
-        - component.update: batt_percentage
 
   - platform: template
     name: "${friendly_name} Battery"
@@ -300,7 +295,7 @@ sensor:
     id: wifisignal
     unit_of_measurement: "dBm"
     entity_category: "diagnostic"
-    update_interval: 30s
+    update_interval: 60s
 
   - platform: uptime
     id: uptime_seconds
@@ -414,7 +409,7 @@ display:
     reset_pin: 2
     reset_duration: 2ms
     rotation: 270
-    # Full refresh every update (matches the gold/bitcoin configs). This panel
+    # Full refresh every update. This panel
     # does NOT do partial refresh cleanly, higher values superimpose frames
     # and corrupt the image. Keep at 1. Redraw frequency is already minimised
     # by the change-detection interval above.
@@ -440,7 +435,7 @@ display:
         it.printf(W / 2, 66, id(font_row), id(colour_black),
                   TextAlign::CENTER, "Claude usage auth failed");
         it.printf(W / 2, 88, id(font_tiny), id(colour_black),
-                  TextAlign::CENTER, "Renew: see Claude Usage/NOTES.md on the Mac");
+                  TextAlign::CENTER, "Renew: re-run mint_claude_token.py (see repo)");
         if (id(homeassistant_time).now().is_valid()) {
           it.strftime(W / 2, H - 14, id(font_tiny), id(colour_black),
                       TextAlign::TOP_CENTER, "Since %H:%M",
@@ -538,7 +533,11 @@ display:
                  TextAlign::TOP_RIGHT, wifi_icon);
       }
 
-      if (id(batt_percentage).has_state() && !isnan(id(batt_percentage).state)) {
+      // Only draw the battery when a real LiPo is connected (>2.5V). On a
+      // mains build the ADC pin floats near 0V, so draw nothing rather than a
+      // permanent battery-slashed icon.
+      if (id(batt_voltage).has_state() && id(batt_voltage).state > 2.5f &&
+          id(batt_percentage).has_state() && !isnan(id(batt_percentage).state)) {
         const char* battery_icon = "\U000F125E";
         float b = id(batt_percentage).state;
         if (b >= 95)      battery_icon = "\U000F0079";

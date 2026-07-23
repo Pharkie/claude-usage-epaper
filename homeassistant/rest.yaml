@@ -32,6 +32,7 @@ rest:
         icon: mdi:key-alert
         value_template: >
           {% if value_json is defined and value_json.five_hour is defined and value_json.five_hour %}ok
+          {%- elif value_json is defined and value_json.error is defined and value_json.error.type == 'rate_limit_error' %}rate_limited
           {%- elif value_json is defined and value_json.error is defined %}auth_failed
           {%- else %}unknown{% endif %}
 
@@ -91,6 +92,9 @@ rest:
         value_template: >
           {% set ls = (value_json.limits | selectattr('kind', 'eq', 'weekly_scoped') | list)
                       if value_json is defined and value_json.limits is defined else [] %}
-          {% if ls and ls[0].resets_at %}
+          {% set fable = ls | selectattr('scope.model.display_name', 'eq', 'Fable') | list %}
+          {% if fable and fable[0].resets_at %}
+          Resets {{ as_timestamp(fable[0].resets_at) | timestamp_custom('%a %H:%M') }}
+          {%- elif ls and ls[0].resets_at %}
           Resets {{ as_timestamp(ls[0].resets_at) | timestamp_custom('%a %H:%M') }}
           {%- else %}unknown{% endif %}

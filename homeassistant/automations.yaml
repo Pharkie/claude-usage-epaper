@@ -15,13 +15,21 @@
           The e-paper usage token has been rejected for 30 min; renewal may be failing.
           Re-mint with mint_claude_token.py and copy the JSON to /config/claude_usage/credentials.json.
   mode: single
-- id: claude_usage_token_autorenew
-  alias: "Claude Usage - auto-renew OAuth token (4h)"
-  description: "Refresh the chain and write the new bearer into input_text.claude_oauth_bearer. No rest.reload (repeated reloads wedge the REST integration)."
+- id: claude_usage_token_renew
+  alias: "Claude Usage - renew OAuth token"
+  description: "Refresh the chain and write the new bearer into input_text.claude_oauth_bearer. Runs on a 4h cycle and immediately if the token is rejected for 10 min (e.g. HA was off > 8h). mode: single so only one renew runs at a time (the refresh_token rotates; concurrent renews would invalidate each other). No rest.reload (repeated reloads wedge the REST integration)."
+  # stored_traces: 0 because the renew response (with the bearer token) is
+  # captured in response_variable and would otherwise land in the trace.
+  trace:
+    stored_traces: 0
   triggers:
     - trigger: time_pattern
       hours: "/4"
       minutes: "7"
+    - trigger: state
+      entity_id: sensor.claude_usage_status
+      to: "auth_failed"
+      for: "00:10:00"
   actions:
     - action: shell_command.claude_usage_renew
       response_variable: renew
@@ -46,14 +54,18 @@
             title: "Claude usage token renewal FAILED"
             message: "renew.py: {{ renew.stdout }} {{ renew.stderr }}. Re-mint if it persists."
   mode: single
-- id: claude_usage_token_autoheal
-  alias: "Claude Usage - immediate renew on auth failure"
-  description: "If the token is rejected for 10 min (e.g. HA was off > 8h), renew now instead of waiting for the 4h cycle."
+- id: claude_usage_token_retry
+  alias: "Claude Usage - retry renew while auth failed"
+  description: "Re-attempt renewal every 30 min while the token is still rejected, so a failed auto-heal doesn't wait 4h for the next cycle."
+  # stored_traces: 0 because the renew response (with the bearer token) is
+  # captured in response_variable and would otherwise land in the trace.
+  trace:
+    stored_traces: 0
   triggers:
-    - trigger: state
-      entity_id: sensor.claude_usage_status
-      to: "auth_failed"
-      for: "00:10:00"
+    - trigger: time_pattern
+      minutes: "/30"
+  conditions:
+    - "{{ states('sensor.claude_usage_status') == 'auth_failed' }}"
   actions:
     - action: shell_command.claude_usage_renew
       response_variable: renew
@@ -68,10 +80,13 @@
             - action: homeassistant.update_entity
               target:
                 entity_id: sensor.claude_usage_status
+            - action: persistent_notification.dismiss
+              data:
+                notification_id: claude_usage_renew_failed
       default:
         - action: persistent_notification.create
           data:
             notification_id: claude_usage_renew_failed
             title: "Claude usage token renewal FAILED"
-            message: "Auto-heal renew failed: {{ renew.stdout }}. Re-mint if it persists."
+            message: "renew.py: {{ renew.stdout }} {{ renew.stderr }}. Re-mint if it persists."
   mode: single

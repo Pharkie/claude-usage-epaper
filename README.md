@@ -17,8 +17,9 @@ phone app and the web all draw from the same session and weekly caps.
 ## What you get
 
 - Session, weekly and per-model bars, each with its reset time.
-- Updates within a minute of a number changing. It only redraws when something
-  actually changed, so the panel isn't flashing all day.
+- Redraws within a minute of Home Assistant's numbers changing (HA polls the API
+  every 5 minutes). It only redraws when something actually changed, so the panel
+  isn't flashing all day.
 - Keeps working with your computer off, because Home Assistant does the polling.
   Phone and web usage count against the same limits, so the numbers stay right
   either way.
@@ -85,8 +86,14 @@ non-obvious (scope requirements, and a User-Agent bot filter that fakes
   Tools > Actions > `input_text.set_value`). The rest sensor reads this helper
   as its auth header, and the renewal automation keeps it updated, so you never
   reload the integration.
+- The sensor polls every 5 minutes, so after pasting the token either wait or
+  force it now with Developer Tools > Actions > `homeassistant.update_entity` on
+  `sensor.claude_usage_status`.
 - Check Developer Tools > States: `sensor.claude_usage_session` and friends
-  should be numbers, and `sensor.claude_usage_status` should be `ok`.
+  should be numbers, and `sensor.claude_usage_status` should be `ok`. The other
+  states: `auth_failed` = token rejected (re-check the helper value starts with
+  `Bearer ` including the space, or re-mint); `unknown` = the request failed or
+  the response shape changed; `rate_limited` = temporary API rate limit.
 
 ### 3. ESPHome
 
@@ -95,18 +102,26 @@ non-obvious (scope requirements, and a User-Agent bot filter that fakes
   ([download](https://github.com/Templarian/MaterialDesign-Webfont/raw/master/fonts/materialdesignicons-webfont.ttf))
   as `esphome/fonts/`. Montserrat fetches automatically from Google Fonts at
   build time.
+- Install the ESPHome CLI first (`pip install esphome`, or the uv equivalent);
+  the first flash is over USB, later updates are OTA.
 - Create `esphome/secrets.yaml` with `wifi_ssid`, `wifi_password`,
   `api_encryption_key` (`openssl rand -base64 32`) and `ota_password` (any
   hex string). The YAML pulls all four via `!secret`.
-- `cd esphome && esphome run firebeetle2-29.yaml`, then adopt the device in HA.
+- `cd esphome && esphome run firebeetle2-29.yaml`. HA will auto-discover the
+  device (Settings > Devices & Services); add it and paste the
+  `api_encryption_key` from `secrets.yaml` when prompted.
 
 ### 4. Auto-renewal
 
 Copy `scripts/renew.py` and your minted credentials JSON (as
-`credentials.json`) to `/config/claude_usage/` on HA, add
+`credentials.json`) to `/config/claude_usage/` on HA, and add
 `shell_command: {claude_usage_renew: "python3 /config/claude_usage/renew.py"}`
-to `configuration.yaml`, and add the automations from
-`homeassistant/automations.yaml`. From then on HA refreshes the token every 4
+to `configuration.yaml`. Restart HA after adding the shell_command (it is not
+hot-reloadable). Then append the entries in `homeassistant/automations.yaml` to
+`/config/automations.yaml` and reload automations (Developer Tools > YAML), or
+recreate them via the UI. To test immediately, run
+`shell_command.claude_usage_renew` from Developer Tools > Actions and check the
+helper's value changed. From then on HA refreshes the token every 4
 hours (and within 10 minutes if it ever fails, e.g. after a long outage),
 writes the new one into the helper, and notifies you only if renewal itself
 fails (the fix is always the same: run the mint script again). The refresh
@@ -121,8 +136,13 @@ a `limits[]` array). If it changes again the templates fall back to `unknown`
 and the panel shows `--`, rather than showing wrong numbers.
 
 If you're adapting it: the per-model row picks the first `weekly_scoped` limit
-on your account (rename the label in the display lambda if it's not Fable), and
-the battery sensors are FireBeetle-2-C6 specific, so delete them for another board.
+on your account (rename the label in the display lambda if it's not Fable). For
+another board, change `board`/`variant` and the `internal_led` pin, remove the
+`external_components` adc override, and delete the FireBeetle-2-C6-specific
+battery sensors.
+
+The token and credentials.json grant account access and are included in HA
+backups (enable backup encryption); revoke by re-minting if either leaks.
 
 ## Similar projects
 
