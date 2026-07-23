@@ -1,32 +1,33 @@
 # Claude Code usage on a 2.9" e-paper display
 
-**Glance up, see your Claude limits, stay in flow.**
+Your Claude Code usage on a small e-paper panel: session, weekly and per-model
+limits, the same numbers `/usage` shows in Claude Code, with the reset time
+under each bar. Home Assistant polls the numbers and pushes them to the display,
+so it keeps updating with your computer off.
 
-If you live in Claude Code you know the feeling: deep in a task and suddenly
-you're out of session, or the weekly cap lands mid-sprint. This little desk
-display keeps your Session, Weekly and per-model usage in view all day, with
-reset times under each bar, so you can pace the heavy work without ever typing
-`/usage`.
+I made it because I kept hitting the session limit mid-task and only noticing
+when Claude Code stopped. Having the number on the desk is enough to pace the
+heavy work.
 
 <p>
 <img src="images/front.jpeg" width="49%" alt="Front view, the inverted 85% is the 80%+ warning" />
 <img src="images/reboot.gif" width="49%" alt="Boot to first draw" />
 </p>
 
-### Reasons to love it
+## What you get
 
-- **Always on**: e-paper is readable in any light, silent, and barely sips power.
-- **Fresh**: updates within a minute of your numbers changing. The panel only
-  redraws when something actually changed, so no constant e-paper flashing.
-- **Works with your computer off**: runs entirely from Home Assistant. Claude
-  usage from your phone and the web counts against the same limits, so the
-  display stays honest while your laptop sleeps.
-- **Warns you before it matters**: any bar at 80%+ flips to an inverted
-  percentage you can read across the room (that's the 85% in the photo).
-- **Fails loudly, never lies**: a full-screen TOKEN EXPIRED banner if auth
-  dies, stale-data warnings if Home Assistant or the API goes away, and dashes
-  instead of fake zeros when data is missing.
-- **No upkeep**: set it up once and it renews its own API token every 4 hours.
+- Session, weekly and per-model bars, each with its reset time.
+- Updates within a minute of a number changing. It only redraws when something
+  actually changed, so the panel isn't flashing all day.
+- Keeps working with your computer off, because Home Assistant does the polling.
+  Phone and web usage count against the same limits, so the numbers stay right
+  either way.
+- Any bar at 80% or over flips to white-on-black, so it's readable across the
+  room (that's the 85% in the photo).
+- It won't show stale or made-up numbers: a full-screen TOKEN EXPIRED banner if
+  auth fails, a stale-data note if Home Assistant or the API drops out, and
+  dashes rather than a fake zero when a value is missing.
+- Renews its own API token every 4 hours, so after setup you don't touch it.
 
 ## Hardware
 
