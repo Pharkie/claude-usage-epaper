@@ -118,16 +118,18 @@ the battery sensors are FireBeetle-2-C6 specific, so delete them for another boa
 
 ## Similar projects
 
+Inspired by the [TRMNL Claude Usage recipe](https://trmnl.com/recipes/263932)
+by Carl Edwards, which scrapes the Claude Code CLI; this build reads the API
+directly and runs on cheap standalone hardware.
+
 The endpoint is unofficial but has a real ecosystem:
 [ccusage](https://github.com/ryoppippi/ccusage),
 [Claude-Code-Usage-Monitor](https://github.com/Maciek-roboblog/Claude-Code-Usage-Monitor)
 (whose [issue #202](https://github.com/Maciek-roboblog/Claude-Code-Usage-Monitor/issues/202)
 is the best public spec of the endpoint),
-[CodexBar](https://github.com/steipete/CodexBar), a
-[TRMNL recipe](https://trmnl.com/recipes/263932) (which scrapes CLI output
-instead of calling the API), and, if you'd rather not hand-roll the HA side,
-the [hass-claude-usage](https://github.com/trickv/hass-claude-usage) HACS
-integration.
+[CodexBar](https://github.com/steipete/CodexBar), and, if you'd rather not
+hand-roll the HA side, the [hass-claude-usage](https://github.com/trickv/hass-claude-usage)
+HACS integration.
 
 Two things in this repo don't seem to be documented anywhere else:
 
@@ -156,10 +158,6 @@ sessions were closely planned, directed and verified by the human author
 throughout. The code and results were reviewed and tested by the human author
 beyond the LLM. Still, the code has had limited manual review; I encourage
 you to make your own checks and use this code at your own risk.
-
-Inspired by the [TRMNL Claude Usage recipe](https://trmnl.com/recipes/263932)
-by Carl Edwards, which scrapes the Claude Code CLI; this build reads the API
-directly and runs on cheap standalone hardware.
 
 ## License
 
