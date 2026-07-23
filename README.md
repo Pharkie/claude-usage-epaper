@@ -86,8 +86,9 @@ non-obvious (scope requirements, and a User-Agent bot filter that fakes
   ([download](https://github.com/Templarian/MaterialDesign-Webfont/raw/master/fonts/materialdesignicons-webfont.ttf))
   as `esphome/fonts/`. Montserrat fetches automatically from Google Fonts at
   build time.
-- In the YAML, set the two `REPLACE_ME` values (API encryption key, OTA
-  password) and your `wifi_ssid`/`wifi_password` secrets.
+- Create `esphome/secrets.yaml` with `wifi_ssid`, `wifi_password`,
+  `api_encryption_key` (`openssl rand -base64 32`) and `ota_password` (any
+  hex string). The YAML pulls all four via `!secret`.
 - `cd esphome && esphome run firebeetle2-29.yaml`, then adopt the device in HA.
 
 ### 4. Auto-renewal

@@ -65,12 +65,12 @@ wifi:
 # the already-adopted device reconnects to HA and accepts OTA without re-provisioning.
 api:
   encryption:
-    key: "REPLACE_ME"  # generate: openssl rand -base64 32
+    key: !secret api_encryption_key   # generate: openssl rand -base64 32
   id: api_status
 
 ota:
   - platform: esphome
-    password: "REPLACE_ME"  # any hex string; keep it private
+    password: !secret ota_password     # any hex string; keep it private
 
 button:
   - platform: shutdown
