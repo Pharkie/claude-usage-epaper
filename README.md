@@ -122,7 +122,7 @@ instead of calling the API), and â€” if you'd rather not hand-roll the HA side â
 the [hass-claude-usage](https://github.com/trickv/hass-claude-usage) HACS
 integration.
 
-Two things in this gist don't seem to be documented anywhere else:
+Two things in this repo don't seem to be documented anywhere else:
 
 1. **A 1-year token that can read usage.** Public docs treat "long-lived" and
    "usage-capable" as mutually exclusive (`claude setup-token` = 1 year but
