@@ -54,5 +54,6 @@ os.chmod(out, 0o600)
 
 print(f"\nSUCCESS, token valid {days:.0f} days, scope: {tok.get('scope')}")
 print(f"Full response (incl. refresh_token for renewal) saved to {out}")
-print("\nPut this line in Home Assistant secrets.yaml (single line, no wrap):")
-print(f'\nclaude_oauth_bearer: "Bearer {tok["access_token"]}"')
+print("Also copy that file to Home Assistant as /config/claude_usage/credentials.json")
+print("\nSet the Home Assistant helper input_text.claude_oauth_bearer to:")
+print(f'\nBearer {tok["access_token"]}')

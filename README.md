@@ -76,10 +76,15 @@ non-obvious (scope requirements, and a User-Agent bot filter that fakes
 
 ### 2. Home Assistant
 
-- Append the contents of `homeassistant/rest.yaml` to your
-  `configuration.yaml` (top-level `rest:` block; merge if you already have one).
-- Add the `claude_oauth_bearer` line the mint script printed to `secrets.yaml`.
-- Restart HA (or reload "RESTful entities and notify services").
+- Append `homeassistant/rest.yaml` and `homeassistant/helpers.yaml` to your
+  `configuration.yaml` (top-level `rest:` and `input_text:` blocks; merge if you
+  already have them).
+- Restart HA.
+- Set the `input_text.claude_oauth_bearer` helper to the `Bearer ...` value the
+  mint script printed (Settings > Devices & Services > Helpers, or Developer
+  Tools > Actions > `input_text.set_value`). The rest sensor reads this helper
+  as its auth header, and the renewal automation keeps it updated, so you never
+  reload the integration.
 - Check Developer Tools > States: `sensor.claude_usage_session` and friends
   should be numbers, and `sensor.claude_usage_status` should be `ok`.
 
@@ -97,13 +102,16 @@ non-obvious (scope requirements, and a User-Agent bot filter that fakes
 
 ### 4. Auto-renewal
 
-Copy `scripts/renew.py` and your minted credentials JSON to
-`/config/claude_usage/` on HA, then wire the `shell_command` and two
-automations from `homeassistant/automations.yaml`. From then on HA renews the
-token every 4 hours, self-heals after downtime, and notifies you only if
-renewal fails (the fix is always the same: run the mint script again). The
-refresh token dies after about 30 days unused, so if you skip this step, plan
-to re-mint by hand instead.
+Copy `scripts/renew.py` and your minted credentials JSON (as
+`credentials.json`) to `/config/claude_usage/` on HA, add
+`shell_command: {claude_usage_renew: "python3 /config/claude_usage/renew.py"}`
+to `configuration.yaml`, and add the automations from
+`homeassistant/automations.yaml`. From then on HA refreshes the token every 4
+hours (and within 10 minutes if it ever fails, e.g. after a long outage),
+writes the new one into the helper, and notifies you only if renewal itself
+fails (the fix is always the same: run the mint script again). The refresh
+token dies after about 30 days unused, so if you skip this step, plan to
+re-mint by hand instead.
 
 ## Caveat
 

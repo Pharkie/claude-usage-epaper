@@ -5,3 +5,6 @@ __pycache__/
 # local build asset (README tells users to download it) + internal dev log
 esphome/fonts/
 NOTES-internal.md
+
+# raw video source (large)
+*.mov

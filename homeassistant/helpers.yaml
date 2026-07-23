@@ -1,0 +1,7 @@
+# The token lives in this helper. The rest sensor reads it as a templated
+# Authorization header on every poll, and the renewal automation rewrites it in
+# place, so the REST integration is never reloaded. Add under configuration.yaml:
+input_text:
+  claude_oauth_bearer:
+    name: Claude OAuth Bearer
+    max: 255

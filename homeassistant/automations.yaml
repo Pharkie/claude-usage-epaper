@@ -1,16 +1,23 @@
-# Self-renewing Claude usage token, Home Assistant wiring.
-# 1) Put renew.py at /config/claude_usage/renew.py and your minted credentials
-#    (the JSON that mint_claude_token.py saved) at /config/claude_usage/credentials.json
-# 2) Add to configuration.yaml (merge into an existing shell_command: block if present):
-#
-#    shell_command:
-#      claude_usage_renew: "python3 /config/claude_usage/renew.py"
-#
-# 3) Add these to automations.yaml (or recreate via the UI), then reload.
-
+- id: claude_usage_auth_failed_alert
+  alias: "Claude Usage - token auth failure alert"
+  description: "Backstop: notify if the usage token stays rejected 30 min (i.e. renewal itself is failing)."
+  triggers:
+    - trigger: state
+      entity_id: sensor.claude_usage_status
+      to: "auth_failed"
+      for: "00:30:00"
+  actions:
+    - action: persistent_notification.create
+      data:
+        notification_id: claude_usage_token_dead
+        title: "Claude usage token dead"
+        message: >-
+          The e-paper usage token has been rejected for 30 min; renewal may be failing.
+          Re-mint with mint_claude_token.py and copy the JSON to /config/claude_usage/credentials.json.
+  mode: single
 - id: claude_usage_token_autorenew
   alias: "Claude Usage - auto-renew OAuth token (4h)"
-  description: "Access tokens live ~8h; the refresh token ~30 days and rotates on use. 4-hourly = 2 retry windows per token."
+  description: "Refresh the chain and write the new bearer into input_text.claude_oauth_bearer. No rest.reload (repeated reloads wedge the REST integration)."
   triggers:
     - trigger: time_pattern
       hours: "/4"
@@ -19,9 +26,16 @@
     - action: shell_command.claude_usage_renew
       response_variable: renew
     - choose:
-        - conditions: "{{ renew.returncode == 0 }}"
+        - conditions: "{{ renew.returncode == 0 and 'BEARER=' in renew.stdout }}"
           sequence:
-            - action: rest.reload
+            - action: input_text.set_value
+              target:
+                entity_id: input_text.claude_oauth_bearer
+              data:
+                value: "{{ renew.stdout.split('BEARER=')[1] | trim }}"
+            - action: homeassistant.update_entity
+              target:
+                entity_id: sensor.claude_usage_status
             - action: persistent_notification.dismiss
               data:
                 notification_id: claude_usage_renew_failed
@@ -30,15 +44,11 @@
           data:
             notification_id: claude_usage_renew_failed
             title: "Claude usage token renewal FAILED"
-            message: >-
-              renew.py failed: {{ renew.stdout }} {{ renew.stderr }} - will retry in 4h.
-              If it keeps failing, re-run mint_claude_token.py and copy the JSON to
-              /config/claude_usage/credentials.json.
+            message: "renew.py: {{ renew.stdout }} {{ renew.stderr }}. Re-mint if it persists."
   mode: single
-
 - id: claude_usage_token_autoheal
   alias: "Claude Usage - immediate renew on auth failure"
-  description: "Self-heal fast (e.g. after HA downtime > 8h) instead of waiting for the 4h cycle."
+  description: "If the token is rejected for 10 min (e.g. HA was off > 8h), renew now instead of waiting for the 4h cycle."
   triggers:
     - trigger: state
       entity_id: sensor.claude_usage_status
@@ -48,13 +58,20 @@
     - action: shell_command.claude_usage_renew
       response_variable: renew
     - choose:
-        - conditions: "{{ renew.returncode == 0 }}"
+        - conditions: "{{ renew.returncode == 0 and 'BEARER=' in renew.stdout }}"
           sequence:
-            - action: rest.reload
+            - action: input_text.set_value
+              target:
+                entity_id: input_text.claude_oauth_bearer
+              data:
+                value: "{{ renew.stdout.split('BEARER=')[1] | trim }}"
+            - action: homeassistant.update_entity
+              target:
+                entity_id: sensor.claude_usage_status
       default:
         - action: persistent_notification.create
           data:
             notification_id: claude_usage_renew_failed
             title: "Claude usage token renewal FAILED"
-            message: "Auto-heal renewal failed: {{ renew.stdout }} - re-mint with mint_claude_token.py."
+            message: "Auto-heal renew failed: {{ renew.stdout }}. Re-mint if it persists."
   mode: single

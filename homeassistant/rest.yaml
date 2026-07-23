@@ -2,8 +2,12 @@
 # ---------------------------------------------------------------------------
 # Claude Code usage (Session / Weekly all-models / Weekly Fable).
 # Polls the undocumented OAuth usage endpoint that powers Claude Code's /usage.
-# Auth: OAuth access token WITH user:profile scope, in secrets.yaml as
-# claude_oauth_bearer (includes the leading "Bearer ") - mint with mint_claude_token.py.
+# Auth: the Authorization header is a TEMPLATE reading input_text.claude_oauth_bearer
+# (create that helper, value "Bearer <token>" from mint_claude_token.py). HA re-renders
+# the header every poll, so the renewal automation can swap the token live by writing
+# the helper - the REST integration is NEVER reloaded. (Repeated rest.reload, the old
+# way of picking up a rotated token, wedges the integration: entities freeze and it
+# stops polling. Templated header avoids that entirely.)
 # NB: keep the claude-cli User-Agent below: fake-looking UAs get a permanent-seeming
 # 429 "rate_limit_error" from Anthropic bot defence.
 # July 2026 JSON: session = five_hour.utilization, weekly-all = seven_day.utilization,
@@ -18,7 +22,7 @@ rest:
     scan_interval: 300
     timeout: 30
     headers:
-      Authorization: !secret claude_oauth_bearer
+      Authorization: "{{ states('input_text.claude_oauth_bearer') }}"
       anthropic-beta: "oauth-2025-04-20"
       User-Agent: "claude-cli/2.1.209 (external, cli)"
       Content-Type: "application/json"
