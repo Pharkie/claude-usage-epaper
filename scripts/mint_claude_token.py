@@ -7,10 +7,10 @@ paste the code shown (looks like  longcode#longstate ) back into the prompt.
 Why this works (learned the hard way):
 - The usage endpoint needs the `user:profile` scope. `claude setup-token`
   tokens are inference-only, so they can NOT read usage.
-- A custom `expires_in` (1 year) is only allowed for NARROW scopes — request
+- A custom `expires_in` (1 year) is only allowed for NARROW scopes, request
   more scopes and the server refuses. So we ask for user:profile+user:inference.
 - Anthropic's OAuth endpoints reply "429 rate_limit_error" FOREVER to requests
-  with a fake-looking User-Agent. That 429 is bot defence, not a rate limit —
+  with a fake-looking User-Agent. That 429 is bot defence, not a rate limit -
   the UA below matches the real Claude Code CLI format.
 """
 import base64, hashlib, json, os, secrets, urllib.parse, urllib.request
@@ -52,7 +52,7 @@ with open(out, "w") as f:
     json.dump(tok, f, indent=2)
 os.chmod(out, 0o600)
 
-print(f"\nSUCCESS — token valid {days:.0f} days, scope: {tok.get('scope')}")
+print(f"\nSUCCESS, token valid {days:.0f} days, scope: {tok.get('scope')}")
 print(f"Full response (incl. refresh_token for renewal) saved to {out}")
 print("\nPut this line in Home Assistant secrets.yaml (single line, no wrap):")
 print(f'\nclaude_oauth_bearer: "Bearer {tok["access_token"]}"')

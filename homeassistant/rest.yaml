@@ -8,7 +8,7 @@
 # 429 "rate_limit_error" from Anthropic bot defence.
 # July 2026 JSON: session = five_hour.utilization, weekly-all = seven_day.utilization,
 # per-model in `limits[]` where kind == "weekly_scoped" (scope.model.display_name).
-# Templates only emit numbers when the source is a number — anything else yields
+# Templates only emit numbers when the source is a number, anything else yields
 # "unknown" (NOT 0). claude_usage_status distinguishes a dead/rejected token
 # ("auth_failed") from transport problems ("unknown") so the display can show
 # an explicit TOKEN EXPIRED banner.

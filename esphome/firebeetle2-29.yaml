@@ -4,7 +4,7 @@
 # Setup instructions: see README.md in this gist.
 #
 # Mains-powered: no deep sleep. Redraws ONLY when displayed data changes
-# (checked every 60s), plus a 30-min safety refresh — so the full-refresh
+# (checked every 60s), plus a 30-min safety refresh, so the full-refresh
 # flash happens when a % ticks, not every 5 minutes.
 # Data comes from Home Assistant REST sensors polling
 # https://api.anthropic.com/api/oauth/usage (see NOTES.md).
@@ -23,8 +23,8 @@ substitutions:
   # readiness_checks gates the FIRST draw on everything the dashboard shows, so
   # a partial frame (bars missing) never appears. Timeout still draws whatever
   # has arrived; the 60s change-check repaints as the rest lands. No wifisignal
-  # here — its first reading lags 30s and would stall boot.
-  # NB: this block scalar is injected verbatim into C++ — comments must stay
+  # here, its first reading lags 30s and would stall boot.
+  # NB: this block scalar is injected verbatim into C++, comments must stay
   # OUT of it (a '#' line inside becomes an invalid preprocessor directive).
   readiness_checks: |-
     {"WiFi", id(wifi_status).is_connected()},
@@ -99,7 +99,7 @@ esphome:
     - includes/text_utils.h # Include the text utilities
 
   # Boot: wait (max 20s) until everything the dashboard needs has arrived,
-  # then draw ONCE. No intermediate status draw — saves a full 3-4s refresh.
+  # then draw ONCE. No intermediate status draw, saves a full 3-4s refresh.
   on_boot:
     priority: -100.0
     then:
@@ -219,13 +219,13 @@ interval:
 time:
   - platform: homeassistant
     id: homeassistant_time
-    # No timezone: set — ESPHome syncs the timezone from Home Assistant at
+    # No timezone: set, ESPHome syncs the timezone from Home Assistant at
     # runtime, so the device follows HA's TZ automatically.
 
 sensor:
   # ---- Claude usage percentages, imported from Home Assistant ----
   # internal: false so the device re-exports them: what the ESP *thinks* the
-  # values are is then visible in HA — invaluable for debugging.
+  # values are is then visible in HA, invaluable for debugging.
   - platform: homeassistant
     name: "${device_name} Claude Session"
     entity_id: sensor.claude_usage_session
@@ -415,7 +415,7 @@ display:
     reset_duration: 2ms
     rotation: 270
     # Full refresh every update (matches the gold/bitcoin configs). This panel
-    # does NOT do partial refresh cleanly — higher values superimpose frames
+    # does NOT do partial refresh cleanly, higher values superimpose frames
     # and corrupt the image. Keep at 1. Redraw frequency is already minimised
     # by the change-detection interval above.
     full_update_every: 1

@@ -2,10 +2,10 @@
 """Self-renew the Claude usage OAuth token on Home Assistant.
 
 Reads /config/claude_usage/credentials.json, refreshes it (requesting a fresh
-1-year expiry — granted only for narrow scopes), atomically saves the rotated
+1-year expiry, granted only for narrow scopes), atomically saves the rotated
 credentials, and rewrites the claude_oauth_bearer line in /config/secrets.yaml.
 
-Run weekly (automation) — the refresh token only lives ~30 days, so periodic
+Run weekly (automation), the refresh token only lives ~30 days, so periodic
 renewal is what keeps the chain alive indefinitely. Exit 0 on success.
 Stdlib only; runs inside the HA Core container via shell_command.
 """

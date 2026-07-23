@@ -1,4 +1,4 @@
-# Self-renewing Claude usage token — Home Assistant wiring.
+# Self-renewing Claude usage token, Home Assistant wiring.
 # 1) Put renew.py at /config/claude_usage/renew.py and your minted credentials
 #    (the JSON that mint_claude_token.py saved) at /config/claude_usage/credentials.json
 # 2) Add to configuration.yaml (merge into an existing shell_command: block if present):
@@ -10,7 +10,7 @@
 
 - id: claude_usage_token_autorenew
   alias: "Claude Usage - auto-renew OAuth token (4h)"
-  description: "Access tokens live ~8h; the refresh ticket ~30 days and rotates on use. 4-hourly = 2 retry windows per token."
+  description: "Access tokens live ~8h; the refresh token ~30 days and rotates on use. 4-hourly = 2 retry windows per token."
   triggers:
     - trigger: time_pattern
       hours: "/4"
