@@ -141,6 +141,10 @@ esphome:
           }
       - script.execute: update_boot_time
       - script.execute: update_screen
+      # Record the signature of what we just drew, so the first 60s check does
+      # not redundantly redraw identical content.
+      - script.execute: compute_sig
+      - lambda: 'id(drawn_sig) = id(pending_sig);'
       - output.turn_off: internal_led
 
 binary_sensor:
@@ -156,13 +160,35 @@ globals:
     type: std::string
     restore_value: no
     initial_value: '"Waiting for WiFi/HA..."'
-  # Signature of what's currently drawn; redraw happens only when it changes.
+  # drawn_sig = signature of what's on screen now; pending_sig = signature just
+  # computed by compute_sig. Redraw happens only when they differ.
   - id: drawn_sig
+    type: std::string
+    restore_value: no
+    initial_value: '""'
+  - id: pending_sig
     type: std::string
     restore_value: no
     initial_value: '""'
 
 script:
+  # Compute the "what should be on screen" signature into pending_sig. Shared by
+  # on_boot (to record the first draw) and the 60s interval (to detect changes).
+  - id: compute_sig
+    then:
+      - lambda: |-
+          char sig[160];
+          // NB: bare id(x) yields a raw pointer in ESPHome lambdas, so the
+          // helper must take a pointer (HomeassistantSensor* upcasts fine).
+          auto pct_of = [](esphome::sensor::Sensor *s) -> int {
+            return (s->has_state() && !isnan(s->state)) ? (int)(s->state + 0.5f) : -1;
+          };
+          snprintf(sig, sizeof(sig), "%d|%d|%d|%s|%s|%s|%s|%d",
+                   pct_of(id(session_pct)), pct_of(id(week_pct)), pct_of(id(fable_pct)),
+                   id(session_reset).state.c_str(), id(week_reset).state.c_str(),
+                   id(fable_reset).state.c_str(), id(usage_status).state.c_str(),
+                   id(api_status).is_connected() ? 1 : 0);
+          id(pending_sig) = sig;
   - id: update_screen
     mode: restart
     then:
@@ -191,21 +217,11 @@ interval:
   # HA link). Checked every 60s => worst-case 60s lag, zero needless flash.
   - interval: 60s
     then:
+      - script.execute: compute_sig
       - lambda: |-
-          char sig[160];
-          // NB: bare id(x) yields a raw pointer in ESPHome lambdas, so the
-          // helper must take a pointer (HomeassistantSensor* upcasts fine).
-          auto pct_of = [](esphome::sensor::Sensor *s) -> int {
-            return (s->has_state() && !isnan(s->state)) ? (int)(s->state + 0.5f) : -1;
-          };
-          snprintf(sig, sizeof(sig), "%d|%d|%d|%s|%s|%s|%s|%d",
-                   pct_of(id(session_pct)), pct_of(id(week_pct)), pct_of(id(fable_pct)),
-                   id(session_reset).state.c_str(), id(week_reset).state.c_str(),
-                   id(fable_reset).state.c_str(), id(usage_status).state.c_str(),
-                   id(api_status).is_connected() ? 1 : 0);
-          if (id(drawn_sig) != sig) {
-            ESP_LOGI("display", "Content changed, redrawing (%s)", sig);
-            id(drawn_sig) = sig;
+          if (id(pending_sig) != id(drawn_sig)) {
+            ESP_LOGI("display", "Content changed, redrawing (%s)", id(pending_sig).c_str());
+            id(drawn_sig) = id(pending_sig);
             id(update_screen).execute();
           }
   # Occasional anti-ghost/liveness refresh only (full_update_every:1 already
