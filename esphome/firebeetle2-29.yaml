@@ -1,0 +1,556 @@
+# Claude Code usage on a 2.9" e-paper display (ESPHome + Home Assistant)
+# Shows Session / Weekly all-models / Weekly per-model (e.g. Fable) usage bars
+# with reset times, on a FireBeetle 2 ESP32-C6 + Waveshare 2.90" V2 (B/W) panel.
+# Setup instructions: see README.md in this gist.
+#
+# Mains-powered: no deep sleep. Redraws ONLY when displayed data changes
+# (checked every 60s), plus a 30-min safety refresh — so the full-refresh
+# flash happens when a % ticks, not every 5 minutes.
+# Data comes from Home Assistant REST sensors polling
+# https://api.anthropic.com/api/oauth/usage (see NOTES.md).
+#
+# Author: Adam Knowles
+
+esp32:
+  board: esp32-c6-devkitc-1
+  variant: esp32c6
+  framework:
+    type: esp-idf
+
+substitutions:
+  device_name: "firebeetle2-29"
+  friendly_name: "Claude Usage: Firebeetle2 ESP32-C6 2.9in"
+  # readiness_checks gates the FIRST draw on everything the dashboard shows, so
+  # a partial frame (bars missing) never appears. Timeout still draws whatever
+  # has arrived; the 60s change-check repaints as the rest lands. No wifisignal
+  # here — its first reading lags 30s and would stall boot.
+  # NB: this block scalar is injected verbatim into C++ — comments must stay
+  # OUT of it (a '#' line inside becomes an invalid preprocessor directive).
+  readiness_checks: |-
+    {"WiFi", id(wifi_status).is_connected()},
+    {"HA API", id(api_status).is_connected()},
+    {"Time", id(homeassistant_time).now().is_valid()},
+    {"Session usage", id(session_pct).has_state() &&
+                      !isnan(id(session_pct).state)},
+    {"Week usage", id(week_pct).has_state() &&
+                   !isnan(id(week_pct).state)},
+    {"Fable usage", id(fable_pct).has_state() &&
+                    !isnan(id(fable_pct).state)},
+
+# Inlined basics (were a shared include in the original project)
+safe_mode:
+  boot_is_good_after: 3s
+  num_attempts: 5
+  reboot_timeout: 1min
+
+mdns:
+
+web_server:
+  port: 80
+
+logger:
+  # DEBUG causes a compile error with the Waveshare ePaper, as of 26May25?
+  level: INFO
+  baud_rate: 115200
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  id: wifi_status
+  # Mains-powered display: no scanning delay, no radio power-save latency.
+  fast_connect: true
+  power_save_mode: none
+
+# Same api encryption key and ota password as the previous (gold) firmware so
+# the already-adopted device reconnects to HA and accepts OTA without re-provisioning.
+api:
+  encryption:
+    key: "REPLACE_ME"  # generate: openssl rand -base64 32
+  id: api_status
+
+ota:
+  - platform: esphome
+    password: "REPLACE_ME"  # any hex string; keep it private
+
+button:
+  - platform: shutdown
+    name: "Shutdown Device"
+  - platform: restart
+    name: "Restart Device"
+  - platform: template
+    name: "Refresh Screen"
+    entity_category: config
+    on_press:
+      - script.execute: update_screen
+
+external_components:
+  - source:
+      type: git
+      url: https://github.com/lboue/esphome
+      ref: adc_oneshot
+    components: [adc]
+    refresh: 0s # Do not update automatically
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+
+  includes:
+    - includes/text_utils.h # Include the text utilities
+
+  # Boot: wait (max 20s) until everything the dashboard needs has arrived,
+  # then draw ONCE. No intermediate status draw — saves a full 3-4s refresh.
+  on_boot:
+    priority: -100.0
+    then:
+      - output.turn_on: internal_led
+      - wait_until:
+          condition:
+            lambda: |-
+              bool all_ready = true;
+              struct {
+                const char* name;
+                bool ready;
+              } checks[] = { ${readiness_checks} };
+              for (auto& check : checks) {
+                if (!check.ready) {
+                  all_ready = false;
+                  break;
+                }
+              }
+              return all_ready;
+          timeout: 20s
+      - lambda: |-
+          // Record anything still missing for the (rare) nothing-arrived screen.
+          struct {
+            const char* name;
+            bool ready;
+          } checks[] = { ${readiness_checks} };
+          std::string missing_data;
+          bool first_missing = true;
+          for (auto& check : checks) {
+            if (!check.ready) {
+              if (!first_missing) { missing_data += ", "; }
+              missing_data += check.name;
+              first_missing = false;
+            }
+          }
+          if (!missing_data.empty()) {
+            ESP_LOGW("boot", "Proceeding without: %s", missing_data.c_str());
+            id(boot_status_line2) = "Missing: " + missing_data;
+          }
+      - script.execute: update_boot_time
+      - script.execute: update_screen
+      - output.turn_off: internal_led
+
+binary_sensor:
+  - platform: status
+    name: "${device_name} Status"
+
+globals:
+  - id: recorded_display_refresh
+    type: int
+    restore_value: yes
+    initial_value: "0"
+  - id: boot_status_line2
+    type: std::string
+    restore_value: no
+    initial_value: '"Waiting for WiFi/HA..."'
+  # Signature of what's currently drawn; redraw happens only when it changes.
+  - id: drawn_sig
+    type: std::string
+    restore_value: no
+    initial_value: '""'
+
+script:
+  - id: update_screen
+    mode: restart
+    then:
+      - component.update: adam_epaper1
+      - lambda: |-
+          id(recorded_display_refresh) += 1;
+          id(display_refreshes).publish_state(id(recorded_display_refresh));
+          if (id(homeassistant_time).now().is_valid()) {
+            id(display_last_update).publish_state(
+                id(homeassistant_time).now().timestamp);
+          }
+  - id: update_boot_time
+    mode: restart
+    then:
+      - if:
+          condition:
+            lambda: 'return id(homeassistant_time).now().is_valid();'
+          then:
+            - lambda: |-
+                auto boot_time = id(homeassistant_time).now().timestamp -
+                                  (int) id(uptime_seconds).state;
+                id(last_boot_time).publish_state(boot_time);
+
+interval:
+  # Redraw only when displayed content changed (values, reset times, HA link,
+  # battery bucket). Checked every 60s => worst-case 60s lag, zero needless flash.
+  - interval: 60s
+    then:
+      - lambda: |-
+          char sig[160];
+          // NB: bare id(x) yields a raw pointer in ESPHome lambdas, so the
+          // helper must take a pointer (HomeassistantSensor* upcasts fine).
+          auto pct_of = [](esphome::sensor::Sensor *s) -> int {
+            return (s->has_state() && !isnan(s->state)) ? (int)(s->state + 0.5f) : -1;
+          };
+          int batt_bucket = (id(batt_percentage).has_state() &&
+                             !isnan(id(batt_percentage).state))
+                            ? (int)(id(batt_percentage).state / 10) : -1;
+          snprintf(sig, sizeof(sig), "%d|%d|%d|%s|%s|%s|%s|%d|%d",
+                   pct_of(id(session_pct)), pct_of(id(week_pct)), pct_of(id(fable_pct)),
+                   id(session_reset).state.c_str(), id(week_reset).state.c_str(),
+                   id(fable_reset).state.c_str(), id(usage_status).state.c_str(),
+                   id(api_status).is_connected() ? 1 : 0, batt_bucket);
+          if (id(drawn_sig) != sig) {
+            ESP_LOGI("display", "Content changed, redrawing (%s)", sig);
+            id(drawn_sig) = sig;
+            id(update_screen).execute();
+          }
+  # Safety refresh: keeps the Updated stamp honest and clears any ghosting.
+  - interval: 30min
+    then:
+      - script.execute: update_screen
+
+time:
+  - platform: homeassistant
+    id: homeassistant_time
+    # No timezone: set — ESPHome syncs the timezone from Home Assistant at
+    # runtime, so the device follows HA's TZ automatically.
+
+sensor:
+  # ---- Claude usage percentages, imported from Home Assistant ----
+  # internal: false so the device re-exports them: what the ESP *thinks* the
+  # values are is then visible in HA — invaluable for debugging.
+  - platform: homeassistant
+    name: "${device_name} Claude Session"
+    entity_id: sensor.claude_usage_session
+    id: session_pct
+    internal: false
+
+  - platform: homeassistant
+    name: "${device_name} Claude Week"
+    entity_id: sensor.claude_usage_week
+    id: week_pct
+    internal: false
+
+  - platform: homeassistant
+    name: "${device_name} Claude Fable"
+    entity_id: sensor.claude_usage_fable
+    id: fable_pct
+    internal: false
+
+  # ---- Battery (kept in case the LiPo is left connected) ----
+  - platform: adc
+    name: "${friendly_name} Battery Voltage"
+    id: batt_voltage
+    pin: 0
+    accuracy_decimals: 2
+    update_interval: 30s
+    samples: 5
+    filters:
+      - multiply: 2.0
+      - sliding_window_moving_average:
+          window_size: 3
+          send_every: 1
+    on_value:
+      then:
+        - component.update: batt_percentage
+
+  - platform: template
+    name: "${friendly_name} Battery"
+    id: batt_percentage
+    unit_of_measurement: "%"
+    accuracy_decimals: 0
+    update_interval: 15min
+    device_class: battery
+    lambda: |-
+      float min_voltage = 2.96;
+      float max_voltage = 4.18;
+      float current_voltage = id(batt_voltage).state;
+      if (isnan(current_voltage)) { return NAN; }
+      float battery_percentage = 100 *
+        ((current_voltage - min_voltage) / (max_voltage - min_voltage));
+      if (battery_percentage > 100) { battery_percentage = 100; }
+      else if (battery_percentage < 0) { battery_percentage = 0; }
+      return battery_percentage;
+
+  # ---- Diagnostics ----
+  - platform: template
+    name: "${device_name} Display Last Update"
+    id: display_last_update
+    entity_category: diagnostic
+    accuracy_decimals: 0
+
+  - platform: template
+    name: "${device_name} Display Refreshes"
+    id: display_refreshes
+    accuracy_decimals: 0
+    unit_of_measurement: "Refreshes"
+    state_class: "total_increasing"
+    entity_category: diagnostic
+    lambda: 'return id(recorded_display_refresh);'
+
+  - platform: wifi_signal
+    name: "${device_name} WiFi Signal Strength"
+    id: wifisignal
+    unit_of_measurement: "dBm"
+    entity_category: "diagnostic"
+    update_interval: 30s
+
+  - platform: uptime
+    id: uptime_seconds
+    name: "${device_name} Uptime Seconds"
+    internal: true
+
+  - platform: template
+    name: "${device_name} Last Boot"
+    id: last_boot_time
+    entity_category: diagnostic
+    accuracy_decimals: 0
+    update_interval: never
+
+text_sensor:
+  # Auth health from HA: "ok" / "auth_failed" / "unknown". Drives the
+  # full-screen TOKEN EXPIRED banner.
+  - platform: homeassistant
+    name: "${device_name} Usage Status"
+    entity_id: sensor.claude_usage_status
+    id: usage_status
+    internal: false
+
+  # Formatted reset times, pre-rendered by HA in local TZ ("Resets 03:50",
+  # "Resets Mon 02:00") so the ESP just prints strings.
+  - platform: homeassistant
+    name: "${device_name} Session Reset"
+    entity_id: sensor.claude_usage_session_reset
+    id: session_reset
+    internal: false
+
+  - platform: homeassistant
+    name: "${device_name} Week Reset"
+    entity_id: sensor.claude_usage_week_reset
+    id: week_reset
+    internal: false
+
+  - platform: homeassistant
+    name: "${device_name} Fable Reset"
+    entity_id: sensor.claude_usage_fable_reset
+    id: fable_reset
+    internal: false
+
+output:
+  - platform: gpio
+    pin: 15
+    id: internal_led
+
+font:
+  - file:
+      type: gfonts
+      family: Montserrat
+      weight: 700
+    size: 15
+    id: font_row
+
+  - file:
+      type: gfonts
+      family: Montserrat
+      weight: 400
+    size: 10
+    id: font_tiny
+
+  - file:
+      type: gfonts
+      family: Montserrat
+      weight: 700
+    size: 22
+    id: font_h2
+
+  - file: "fonts/materialdesignicons-webfont.ttf"
+    id: font_mdi
+    size: 16
+    glyphs:
+      # WiFi
+      - "\U000F0928" # mdi-wifi-strength-4
+      - "\U000F0925" # mdi-wifi-strength-3
+      - "\U000F0922" # mdi-wifi-strength-2
+      - "\U000F091F" # mdi-wifi-strength-1
+      - "\U000F092B" # mdi-wifi-strength-alert-outline (very weak)
+      # Battery
+      - "\U000F0079" # mdi-battery-100
+      - "\U000F007A" # mdi-battery-10
+      - "\U000F007B" # mdi-battery-20
+      - "\U000F007C" # mdi-battery-30
+      - "\U000F007D" # mdi-battery-40
+      - "\U000F007E" # mdi-battery-50
+      - "\U000F007F" # mdi-battery-60
+      - "\U000F0080" # mdi-battery-70
+      - "\U000F0081" # mdi-battery-80
+      - "\U000F0082" # mdi-battery-90
+      - "\U000F125E" # mdi-battery-slashed
+
+# ePaper colour convention: on this display white means no ink (000000) and
+# black means ink (FFFFFF). See https://github.com/esphome/issues/issues/3132
+color:
+  - id: colour_white
+    hex: "000000"
+  - id: colour_black
+    hex: "FFFFFF"
+
+spi:
+  clk_pin: 4
+  mosi_pin: 6 # DIN
+
+display:
+  - platform: waveshare_epaper
+    model: 2.90inV2
+    cs_pin: 7
+    dc_pin: 1
+    busy_pin: 3
+    reset_pin: 2
+    reset_duration: 2ms
+    rotation: 270
+    # Full refresh every update (matches the gold/bitcoin configs). This panel
+    # does NOT do partial refresh cleanly — higher values superimpose frames
+    # and corrupt the image. Keep at 1. Redraw frequency is already minimised
+    # by the change-detection interval above.
+    full_update_every: 1
+    update_interval: never
+    id: adam_epaper1
+    lambda: |-
+      ESP_LOGI("display", ">>> DISPLAY UPDATE <<<");
+
+      // Landscape 296 x 128 after rotation.
+      const int W = it.get_width();
+      const int H = it.get_height();
+
+      bool have_any = (id(session_pct).has_state() && !isnan(id(session_pct).state)) ||
+                      (id(week_pct).has_state()    && !isnan(id(week_pct).state))    ||
+                      (id(fable_pct).has_state()   && !isnan(id(fable_pct).state));
+
+      // Dead token: unmissable full-screen banner (inverted header bar).
+      if (id(usage_status).state == "auth_failed") {
+        it.filled_rectangle(0, 18, W, 34, id(colour_black));
+        it.printf(W / 2, 35, id(font_h2), id(colour_white),
+                  TextAlign::CENTER, "TOKEN EXPIRED");
+        it.printf(W / 2, 66, id(font_row), id(colour_black),
+                  TextAlign::CENTER, "Claude usage auth failed");
+        it.printf(W / 2, 88, id(font_tiny), id(colour_black),
+                  TextAlign::CENTER, "Renew: see Claude Usage/NOTES.md on the Mac");
+        if (id(homeassistant_time).now().is_valid()) {
+          it.strftime(W / 2, H - 14, id(font_tiny), id(colour_black),
+                      TextAlign::TOP_CENTER, "Since %H:%M",
+                      id(homeassistant_time).now());
+        }
+        return;
+      }
+
+      // Nothing at all yet: boot/status screen.
+      if (!have_any) {
+        it.printf(W / 2, H / 2 - 16, id(font_h2), id(colour_black),
+                  TextAlign::CENTER, "Waiting for data...");
+        it.printf(W / 2, H / 2 + 16, id(font_tiny), id(colour_black),
+                  TextAlign::CENTER, "%s", id(boot_status_line2).c_str());
+        return;
+      }
+
+      // Three rows: label (left) + reset time (small, inline) + % (right),
+      // with a fat progress bar underneath. A value >= 80% renders its %
+      // inverted (white on black) as a glanceable warning.
+      const char* bar_labels[3] = {"Session", "Week - All Models", "Week - Fable"};
+      int   bar_y[3]     = {3, 43, 83};
+      float bar_pct[3]   = {id(session_pct).state, id(week_pct).state, id(fable_pct).state};
+      bool  bar_valid[3] = {
+        id(session_pct).has_state() && !isnan(id(session_pct).state),
+        id(week_pct).has_state()    && !isnan(id(week_pct).state),
+        id(fable_pct).has_state()   && !isnan(id(fable_pct).state)
+      };
+      std::string resets[3] = {id(session_reset).state, id(week_reset).state,
+                               id(fable_reset).state};
+
+      for (int i = 0; i < 3; i++) {
+        int y = bar_y[i];
+        float pct = bar_valid[i] ? bar_pct[i] : 0.0f;
+        if (pct < 0) pct = 0;
+        if (pct > 100) pct = 100;
+
+        it.printf(2, y, id(font_row), id(colour_black),
+                  TextAlign::TOP_LEFT, "%s", bar_labels[i]);
+
+        // Percent, inverted when >= 80%.
+        char pct_str[8];
+        if (bar_valid[i]) {
+          snprintf(pct_str, sizeof(pct_str), "%d%%", (int) (pct + 0.5f));
+        } else {
+          snprintf(pct_str, sizeof(pct_str), "--");
+        }
+        if (bar_valid[i] && pct >= 80.0f) {
+          int tw = GetTextWidth(&it, id(font_row), "%s", pct_str);
+          it.filled_rectangle(W - 2 - tw - 6, y - 1, tw + 8, 19, id(colour_black));
+          it.printf(W - 5, y, id(font_row), id(colour_white),
+                    TextAlign::TOP_RIGHT, "%s", pct_str);
+        } else {
+          it.printf(W - 2, y, id(font_row), id(colour_black),
+                    TextAlign::TOP_RIGHT, "%s", pct_str);
+        }
+
+        // Reset time inline, small, to the left of the percent column.
+        if (!resets[i].empty() && resets[i] != "unknown" &&
+            resets[i] != "unavailable") {
+          it.printf(W - 52, y + 4, id(font_tiny), id(colour_black),
+                    TextAlign::TOP_RIGHT, "%s", resets[i].c_str());
+        }
+
+        int by = y + 20;
+        int bw = W - 4;
+        it.rectangle(2, by, bw, 11, id(colour_black));
+        if (bar_valid[i]) {
+          int fill = (int) (bw * pct / 100.0f);
+          if (fill > 2) it.filled_rectangle(2, by, fill, 11, id(colour_black));
+        }
+      }
+
+      // Footer: updated time + HA-link warning (left), wifi + battery (right).
+      if (id(homeassistant_time).now().is_valid()) {
+        it.strftime(2, H - 11, id(font_tiny), id(colour_black),
+                    TextAlign::TOP_LEFT, "Updated %H:%M",
+                    id(homeassistant_time).now());
+      }
+      if (!id(api_status).is_connected()) {
+        it.printf(78, H - 11, id(font_tiny), id(colour_black),
+                  TextAlign::TOP_LEFT, "HA offline - stale!");
+      } else if (id(usage_status).state == "rate_limited") {
+        it.printf(78, H - 11, id(font_tiny), id(colour_black),
+                  TextAlign::TOP_LEFT, "API rate limited - stale");
+      }
+
+      if (id(wifisignal).has_state()) {
+        const char* wifi_icon = "\U000F092B";
+        if (id(wifisignal).state >= -50)      wifi_icon = "\U000F0928";
+        else if (id(wifisignal).state >= -60) wifi_icon = "\U000F0925";
+        else if (id(wifisignal).state >= -75) wifi_icon = "\U000F0922";
+        else if (id(wifisignal).state >= -90) wifi_icon = "\U000F091F";
+        it.print(W, H - 16, id(font_mdi), id(colour_black),
+                 TextAlign::TOP_RIGHT, wifi_icon);
+      }
+
+      if (id(batt_percentage).has_state() && !isnan(id(batt_percentage).state)) {
+        const char* battery_icon = "\U000F125E";
+        float b = id(batt_percentage).state;
+        if (b >= 95)      battery_icon = "\U000F0079";
+        else if (b >= 90) battery_icon = "\U000F0082";
+        else if (b >= 80) battery_icon = "\U000F0081";
+        else if (b >= 70) battery_icon = "\U000F0080";
+        else if (b >= 60) battery_icon = "\U000F007F";
+        else if (b >= 50) battery_icon = "\U000F007E";
+        else if (b >= 40) battery_icon = "\U000F007D";
+        else if (b >= 30) battery_icon = "\U000F007C";
+        else if (b >= 20) battery_icon = "\U000F007B";
+        else if (b >= 10) battery_icon = "\U000F007A";
+        it.print(W - 20, H - 16, id(font_mdi), id(colour_black),
+                 TextAlign::TOP_RIGHT, battery_icon);
+      }

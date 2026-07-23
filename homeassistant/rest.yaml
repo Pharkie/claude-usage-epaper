@@ -1,0 +1,92 @@
+
+# ---------------------------------------------------------------------------
+# Claude Code usage (Session / Weekly all-models / Weekly Fable).
+# Polls the undocumented OAuth usage endpoint that powers Claude Code's /usage.
+# Auth: OAuth access token WITH user:profile scope, in secrets.yaml as
+# claude_oauth_bearer (includes the leading "Bearer ") - mint with mint_claude_token.py.
+# NB: keep the claude-cli User-Agent below: fake-looking UAs get a permanent-seeming
+# 429 "rate_limit_error" from Anthropic bot defence.
+# July 2026 JSON: session = five_hour.utilization, weekly-all = seven_day.utilization,
+# per-model in `limits[]` where kind == "weekly_scoped" (scope.model.display_name).
+# Templates only emit numbers when the source is a number — anything else yields
+# "unknown" (NOT 0). claude_usage_status distinguishes a dead/rejected token
+# ("auth_failed") from transport problems ("unknown") so the display can show
+# an explicit TOKEN EXPIRED banner.
+# ---------------------------------------------------------------------------
+rest:
+  - resource: "https://api.anthropic.com/api/oauth/usage"
+    scan_interval: 300
+    timeout: 30
+    headers:
+      Authorization: !secret claude_oauth_bearer
+      anthropic-beta: "oauth-2025-04-20"
+      User-Agent: "claude-cli/2.1.209 (external, cli)"
+      Content-Type: "application/json"
+    sensor:
+      - name: "Claude Usage Status"
+        unique_id: claude_usage_status
+        icon: mdi:key-alert
+        value_template: >
+          {% if value_json is defined and value_json.five_hour is defined and value_json.five_hour %}ok
+          {%- elif value_json is defined and value_json.error is defined %}auth_failed
+          {%- else %}unknown{% endif %}
+
+      - name: "Claude Usage Session"
+        unique_id: claude_usage_session
+        unit_of_measurement: "%"
+        icon: mdi:clock-fast
+        value_template: >
+          {% if value_json is defined and value_json.five_hour and value_json.five_hour.utilization is number %}{{ value_json.five_hour.utilization | round(0) }}{% else %}unknown{% endif %}
+        json_attributes_path: "$.five_hour"
+        json_attributes:
+          - resets_at
+
+      - name: "Claude Usage Week"
+        unique_id: claude_usage_week
+        unit_of_measurement: "%"
+        icon: mdi:calendar-week
+        value_template: >
+          {% if value_json is defined and value_json.seven_day and value_json.seven_day.utilization is number %}{{ value_json.seven_day.utilization | round(0) }}{% else %}unknown{% endif %}
+        json_attributes_path: "$.seven_day"
+        json_attributes:
+          - resets_at
+
+      - name: "Claude Usage Fable"
+        unique_id: claude_usage_fable
+        unit_of_measurement: "%"
+        icon: mdi:star-four-points
+        # The scoped weekly limit; prefer model "Fable", else first weekly_scoped.
+        value_template: >
+          {% set ls = (value_json.limits | selectattr('kind', 'eq', 'weekly_scoped') | list)
+                      if value_json is defined and value_json.limits is defined else [] %}
+          {% set fable = ls | selectattr('scope.model.display_name', 'eq', 'Fable') | list %}
+          {% if fable and fable[0].percent is number %}{{ fable[0].percent | round(0) }}
+          {% elif ls and ls[0].percent is number %}{{ ls[0].percent | round(0) }}
+          {% else %}unknown{% endif %}
+
+      # ---- Formatted reset times (local TZ) for the e-paper display ----
+      - name: "Claude Usage Session Reset"
+        unique_id: claude_usage_session_reset
+        icon: mdi:clock-end
+        value_template: >
+          {% if value_json is defined and value_json.five_hour and value_json.five_hour.resets_at %}
+          Resets {{ as_timestamp(value_json.five_hour.resets_at) | timestamp_custom('%H:%M') }}
+          {%- else %}unknown{% endif %}
+
+      - name: "Claude Usage Week Reset"
+        unique_id: claude_usage_week_reset
+        icon: mdi:clock-end
+        value_template: >
+          {% if value_json is defined and value_json.seven_day and value_json.seven_day.resets_at %}
+          Resets {{ as_timestamp(value_json.seven_day.resets_at) | timestamp_custom('%a %H:%M') }}
+          {%- else %}unknown{% endif %}
+
+      - name: "Claude Usage Fable Reset"
+        unique_id: claude_usage_fable_reset
+        icon: mdi:clock-end
+        value_template: >
+          {% set ls = (value_json.limits | selectattr('kind', 'eq', 'weekly_scoped') | list)
+                      if value_json is defined and value_json.limits is defined else [] %}
+          {% if ls and ls[0].resets_at %}
+          Resets {{ as_timestamp(ls[0].resets_at) | timestamp_custom('%a %H:%M') }}
+          {%- else %}unknown{% endif %}
