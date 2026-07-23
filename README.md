@@ -1,4 +1,4 @@
-# Claude Code usage on a 2.9" e-paper display
+# ESPHome + Home Assistant: Claude Code usage on a 2.9" e-paper display
 
 Your Claude Code usage on a small e-paper panel: session, weekly and per-model
 limits, the same numbers `/usage` shows in Claude Code, with the reset time
@@ -48,8 +48,11 @@ The stand is a separate model:
 
 ## How it works
 
-```
-Anthropic usage API  <-(poll 5 min, OAuth token)-  Home Assistant  -(push)->  ESP32 -> e-paper
+```mermaid
+flowchart LR
+    A[Anthropic usage API] -->|HA polls every 5 min<br/>with an OAuth token| B[Home Assistant]
+    B -->|pushes over the<br/>ESPHome native API| C[ESP32]
+    C --> D[e-paper display]
 ```
 
 Home Assistant polls `https://api.anthropic.com/api/oauth/usage`, the
@@ -59,7 +62,7 @@ draws the bars.
 
 ## Setup
 
-### 1. Mint a token (about 2 minutes)
+### 1. Mint a token
 
 ```bash
 python3 scripts/mint_claude_token.py
@@ -102,24 +105,16 @@ renewal fails (the fix is always the same: run the mint script again). The
 refresh token dies after about 30 days unused, so if you skip this step, plan
 to re-mint by hand instead.
 
-## Notes and gotchas
+## Caveat
 
-- **Unofficial API.** Anthropic could change or break this endpoint at any
-  time; the JSON shape already changed once (mid-2026, when per-model usage
-  moved into a `limits[]` array). The HA templates degrade to `unknown` (the
-  panel shows `--`) rather than lying if the shape shifts again.
-- **Rename the model row** if you're not tracking Fable: the template picks
-  the first `weekly_scoped` limit on your account, and the label in the
-  display lambda is just a string.
-- **Don't leave a dead token polling.** Repeated failed-auth polls get the
-  usage endpoint itself temporarily 429'd (it forgives as soon as valid auth
-  returns). The status sensor and banner exist so a dead token is obvious.
-- This Waveshare panel **cannot partial-refresh** under ESPHome
-  (`full_update_every: 1` is required or frames superimpose). That's why the
-  config redraws only on data changes instead.
-- Battery bits (the ADC divider on GPIO0 and the pinned `adc_oneshot`
-  external component) are specific to the FireBeetle 2 C6. Delete both if
-  they don't apply to you.
+The usage endpoint is unofficial, so Anthropic could change or break it at any
+time. The shape already changed once (mid-2026, when per-model usage moved into
+a `limits[]` array). If it changes again the templates fall back to `unknown`
+and the panel shows `--`, rather than showing wrong numbers.
+
+If you're adapting it: the per-model row picks the first `weekly_scoped` limit
+on your account (rename the label in the display lambda if it's not Fable), and
+the battery sensors are FireBeetle-2-C6 specific, so delete them for another board.
 
 ## Similar projects
 
