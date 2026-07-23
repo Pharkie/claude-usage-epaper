@@ -5,9 +5,9 @@ limits, the same numbers `/usage` shows in Claude Code, with the reset time
 under each bar. Home Assistant polls the numbers and pushes them to the display,
 so it keeps updating with your computer off.
 
-I made it because I kept hitting the session limit mid-task and only noticing
-when Claude Code stopped. Having the number on the desk is enough to pace the
-heavy work.
+It puts your usage in one place without taking up any screen space, and it
+covers everything that counts against your limits: Claude Code on desktop, the
+phone app and the web all draw from the same session and weekly caps.
 
 <p>
 <img src="images/front.jpeg" width="49%" alt="Front view, the inverted 85% is the 80%+ warning" />
