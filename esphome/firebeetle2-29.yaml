@@ -260,7 +260,7 @@ sensor:
 
   # ---- Battery (kept in case the LiPo is left connected) ----
   - platform: adc
-    name: "${friendly_name} Battery Voltage"
+    name: "${device_name} Battery Voltage"
     id: batt_voltage
     pin: 0
     accuracy_decimals: 2
@@ -273,7 +273,7 @@ sensor:
           send_every: 1
 
   - platform: template
-    name: "${friendly_name} Battery"
+    name: "${device_name} Battery"
     id: batt_percentage
     unit_of_measurement: "%"
     accuracy_decimals: 0
