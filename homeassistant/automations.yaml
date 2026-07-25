@@ -29,7 +29,7 @@
     - trigger: state
       entity_id: sensor.claude_usage_status
       to: "auth_failed"
-      for: "00:10:00"
+      for: "00:02:00"
   actions:
     - action: shell_command.claude_usage_renew
       response_variable: renew
