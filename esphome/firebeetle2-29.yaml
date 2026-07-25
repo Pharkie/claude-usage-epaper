@@ -19,7 +19,7 @@ esp32:
 
 substitutions:
   device_name: "firebeetle2-29"
-  friendly_name: "Claude Usage: Firebeetle2 ESP32-C6 2.9in"
+  friendly_name: "Firebeetle2 29"
   # readiness_checks gates the FIRST draw on everything the dashboard shows, so
   # a partial frame (bars missing) never appears. Timeout still draws whatever
   # has arrived; the 60s change-check repaints as the rest lands. No wifisignal
@@ -149,7 +149,7 @@ esphome:
 
 binary_sensor:
   - platform: status
-    name: "${device_name} Status"
+    name: "Status"
 
 globals:
   - id: recorded_display_refresh
@@ -241,26 +241,26 @@ sensor:
   # internal: false so the device re-exports them: what the ESP *thinks* the
   # values are is then visible in HA, invaluable for debugging.
   - platform: homeassistant
-    name: "${device_name} Claude Session"
+    name: "Claude Session"
     entity_id: sensor.claude_usage_session
     id: session_pct
     internal: false
 
   - platform: homeassistant
-    name: "${device_name} Claude Week"
+    name: "Claude Week"
     entity_id: sensor.claude_usage_week
     id: week_pct
     internal: false
 
   - platform: homeassistant
-    name: "${device_name} Claude Fable"
+    name: "Claude Fable"
     entity_id: sensor.claude_usage_fable
     id: fable_pct
     internal: false
 
   # ---- Battery (kept in case the LiPo is left connected) ----
   - platform: adc
-    name: "${device_name} Battery Voltage"
+    name: "Battery Voltage"
     id: batt_voltage
     pin: 0
     accuracy_decimals: 2
@@ -273,7 +273,7 @@ sensor:
           send_every: 1
 
   - platform: template
-    name: "${device_name} Battery"
+    name: "Battery"
     id: batt_percentage
     unit_of_measurement: "%"
     accuracy_decimals: 0
@@ -292,13 +292,13 @@ sensor:
 
   # ---- Diagnostics ----
   - platform: template
-    name: "${device_name} Display Last Update"
+    name: "Display Last Update"
     id: display_last_update
     entity_category: diagnostic
     accuracy_decimals: 0
 
   - platform: template
-    name: "${device_name} Display Refreshes"
+    name: "Display Refreshes"
     id: display_refreshes
     accuracy_decimals: 0
     unit_of_measurement: "Refreshes"
@@ -307,7 +307,7 @@ sensor:
     lambda: 'return id(recorded_display_refresh);'
 
   - platform: wifi_signal
-    name: "${device_name} WiFi Signal Strength"
+    name: "WiFi Signal Strength"
     id: wifisignal
     unit_of_measurement: "dBm"
     entity_category: "diagnostic"
@@ -315,11 +315,11 @@ sensor:
 
   - platform: uptime
     id: uptime_seconds
-    name: "${device_name} Uptime Seconds"
+    name: "Uptime Seconds"
     internal: true
 
   - platform: template
-    name: "${device_name} Last Boot"
+    name: "Last Boot"
     id: last_boot_time
     entity_category: diagnostic
     accuracy_decimals: 0
@@ -329,7 +329,7 @@ text_sensor:
   # Auth health from HA: "ok" / "auth_failed" / "unknown". Drives the
   # full-screen TOKEN EXPIRED banner.
   - platform: homeassistant
-    name: "${device_name} Usage Status"
+    name: "Usage Status"
     entity_id: sensor.claude_usage_status
     id: usage_status
     internal: false
@@ -337,19 +337,19 @@ text_sensor:
   # Formatted reset times, pre-rendered by HA in local TZ ("Resets 03:50",
   # "Resets Mon 02:00") so the ESP just prints strings.
   - platform: homeassistant
-    name: "${device_name} Session Reset"
+    name: "Session Reset"
     entity_id: sensor.claude_usage_session_reset
     id: session_reset
     internal: false
 
   - platform: homeassistant
-    name: "${device_name} Week Reset"
+    name: "Week Reset"
     entity_id: sensor.claude_usage_week_reset
     id: week_reset
     internal: false
 
   - platform: homeassistant
-    name: "${device_name} Fable Reset"
+    name: "Fable Reset"
     entity_id: sensor.claude_usage_fable_reset
     id: fable_reset
     internal: false
