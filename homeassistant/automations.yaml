@@ -90,3 +90,25 @@
             title: "Claude usage token renewal FAILED"
             message: "renew.py: {{ renew.stdout }} {{ renew.stderr }}. Re-mint if it persists."
   mode: single
+
+- id: claude_usage_refresh_after_start
+  alias: "Claude Usage - re-poll once HA has settled"
+  description: >-
+    On a Core restart the REST poll can fire BEFORE
+    input_text.claude_oauth_bearer has restored its value, so the request goes
+    out with an empty Authorization header, 401s, and the e-paper shows a fault
+    for a whole scan_interval (5 min). Wait for the helper to be populated, then
+    force one re-poll. Nothing is renewed here - the token is usually fine; this
+    only refetches.
+  triggers:
+    - trigger: homeassistant
+      event: start
+  actions:
+    - wait_template: "{{ states('input_text.claude_oauth_bearer').startswith('Bearer ') }}"
+      timeout: "00:02:00"
+      continue_on_timeout: true
+    - delay: "00:00:05"
+    - action: homeassistant.update_entity
+      target:
+        entity_id: sensor.claude_usage_status
+  mode: single

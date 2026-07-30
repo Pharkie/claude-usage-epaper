@@ -97,6 +97,7 @@ esphome:
 
   includes:
     - includes/text_utils.h # Include the text utilities
+    - includes/status_banner.h # Full-screen status banner (distinct per fault)
 
   # Boot: wait (max 20s) until everything the dashboard needs has arrived,
   # then draw ONCE. No intermediate status draw, saves a full 3-4s refresh.
@@ -443,24 +444,48 @@ display:
                       (id(week_pct).has_state()    && !isnan(id(week_pct).state))    ||
                       (id(fable_pct).has_state()   && !isnan(id(fable_pct).state));
 
-      // Dead token: unmissable full-screen banner (inverted header bar).
-      if (id(usage_status).state == "auth_failed") {
-        it.filled_rectangle(0, 18, W, 34, id(colour_black));
-        it.printf(W / 2, 35, id(font_h2), id(colour_white),
-                  TextAlign::CENTER, "TOKEN EXPIRED");
-        it.printf(W / 2, 66, id(font_row), id(colour_black),
-                  TextAlign::CENTER, "Claude usage auth failed");
-        it.printf(W / 2, 88, id(font_tiny), id(colour_black),
-                  TextAlign::CENTER, "Renew: re-run mint_claude_token.py (see repo)");
-        if (id(homeassistant_time).now().is_valid()) {
-          it.strftime(W / 2, H - 14, id(font_tiny), id(colour_black),
-                      TextAlign::TOP_CENTER, "Since %H:%M",
-                      id(homeassistant_time).now());
+      // Faults, most specific first. Each condition gets its OWN wording:
+      // only `auth_failed` means the token is genuinely dead, so only that one
+      // tells the user to re-mint. `no_token` (HA hasn't handed us a bearer
+      // yet) is normal for a few minutes after a Core restart, and used to be
+      // reported as "TOKEN EXPIRED" -- sending the user after a problem that
+      // did not exist.
+      const std::string st = id(usage_status).state;
+      const bool ha_link   = id(api_status).is_connected();
+
+      const char *head = nullptr, *detail = "", *advice = "";
+      if (st == "auth_failed") {
+        head   = "TOKEN EXPIRED";
+        detail = "Claude rejected the usage token";
+        advice = "Renew: re-run mint_claude_token.py (see repo)";
+      } else if (!have_any) {
+        if (!ha_link) {
+          head   = "NO HOME ASSISTANT";
+          detail = "Can't reach Home Assistant";
+          advice = "Check HA is up and this display's wifi";
+        } else if (st == "no_token") {
+          head   = "TOKEN NOT READY";
+          detail = "Home Assistant has no token yet";
+          advice = "Normal for a few min after an HA restart";
+        } else if (st == "rate_limited") {
+          head   = "RATE LIMITED";
+          detail = "Claude API is rate limiting";
+          advice = "Should clear on its own";
+        } else if (st == "unknown") {
+          head   = "NO USAGE DATA";
+          detail = "HA could not read the Claude API";
+          advice = "Token looks fine; check HA's internet";
         }
+      }
+
+      if (head != nullptr) {
+        DrawStatusBanner(&it, id(font_h2), id(font_row), id(font_tiny),
+                         id(colour_black), id(colour_white),
+                         head, detail, advice, id(homeassistant_time).now());
         return;
       }
 
-      // Nothing at all yet: boot/status screen.
+      // Nothing yet and no specific fault to name: boot/status screen.
       if (!have_any) {
         it.printf(W / 2, H / 2 - 16, id(font_h2), id(colour_black),
                   TextAlign::CENTER, "Waiting for data...");
@@ -537,6 +562,12 @@ display:
       } else if (id(usage_status).state == "rate_limited") {
         it.printf(78, H - 11, id(font_tiny), id(colour_black),
                   TextAlign::TOP_LEFT, "API rate limited - stale");
+      } else if (id(usage_status).state == "no_token") {
+        it.printf(78, H - 11, id(font_tiny), id(colour_black),
+                  TextAlign::TOP_LEFT, "token not ready - stale");
+      } else if (id(usage_status).state == "unknown") {
+        it.printf(78, H - 11, id(font_tiny), id(colour_black),
+                  TextAlign::TOP_LEFT, "no API data - stale");
       }
 
       if (id(wifisignal).has_state()) {
