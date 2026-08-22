@@ -28,8 +28,31 @@
 #                  false "TOKEN EXPIRED / re-mint" banner on the display.
 #   auth_failed  - a real token WAS sent and Anthropic rejected it. The only
 #                  state that means re-mint.
-#   rate_limited - 429 from Anthropic.
+#   rate_limited - 429 from Anthropic. NOTE an EXPIRED token often lands here,
+#                  not in auth_failed: Anthropic answers a dead token with 429
+#                  rate_limit_error as often as 401. Anything alerting on a bad
+#                  token must watch both (learned 2026-08-22, the hard way).
 #   unknown      - reachable-but-unusable response (transport problem).
+#
+# The `availability:` templates must guard the KEY, not just value_json. On an
+# error response value_json IS defined -- it is {"type":"error","error":{...}} --
+# so a bare `value_json.five_hour` is Undefined and its truthiness RAISES. HA
+# then treats the errored availability template as available, renders the value
+# template, and pushes a non-numeric state at a sensor carrying unit "%", which
+# is the ValueError that kills the entity. Hence `value_json.five_hour is
+# defined and ...`, mirroring the status template's short-circuiting idiom.
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Claude Code usage (Session / Weekly all-models / Weekly Fable).
+# Polls the undocumented OAuth usage endpoint that powers Claude Code's /usage.
+# Auth: OAuth access token WITH user:profile scope, in secrets.yaml as
+# claude_oauth_bearer (includes the leading "Bearer ").
+# July 2026 JSON: session = five_hour.utilization, weekly-all = seven_day.utilization,
+# per-model in `limits[]` where kind == "weekly_scoped" (scope.model.display_name).
+# Templates only emit numbers when the source is a number — anything else yields
+# "unknown" (NOT 0). claude_usage_status distinguishes a dead/rejected token
+# ("auth_failed") from transport problems ("unknown") so the display can show
+# an explicit TOKEN EXPIRED banner.
 # ---------------------------------------------------------------------------
 rest:
   - resource: "https://api.anthropic.com/api/oauth/usage"
@@ -48,8 +71,8 @@ rest:
           {% set bearer = states('input_text.claude_oauth_bearer') %}
           {% if not bearer.startswith('Bearer ') %}no_token
           {%- elif value_json is defined and value_json.five_hour is defined and value_json.five_hour %}ok
-          {%- elif value_json is defined and value_json.error is defined and value_json.error.type == 'rate_limit_error' %}rate_limited
-          {%- elif value_json is defined and value_json.error is defined %}auth_failed
+          {%- elif value_json is defined and value_json.error is defined and value_json.error.type is defined %}
+          {{- ' rate_limited' if value_json.error.type == 'rate_limit_error' else ' auth_failed' }}
           {%- else %}unknown{% endif %}
 
       - name: "Claude Usage Session"
@@ -57,8 +80,8 @@ rest:
         unit_of_measurement: "%"
         icon: mdi:clock-fast
         availability: >
-          {{ value_json is defined and value_json.five_hour
-             and value_json.five_hour.utilization is number }}
+          {{ value_json is defined and value_json.five_hour is defined
+             and value_json.five_hour and value_json.five_hour.utilization is number }}
         value_template: >
           {{ value_json.five_hour.utilization | round(0) }}
         json_attributes_path: "$.five_hour"
@@ -70,8 +93,8 @@ rest:
         unit_of_measurement: "%"
         icon: mdi:calendar-week
         availability: >
-          {{ value_json is defined and value_json.seven_day
-             and value_json.seven_day.utilization is number }}
+          {{ value_json is defined and value_json.seven_day is defined
+             and value_json.seven_day and value_json.seven_day.utilization is number }}
         value_template: >
           {{ value_json.seven_day.utilization | round(0) }}
         json_attributes_path: "$.seven_day"
@@ -93,7 +116,7 @@ rest:
                       if value_json is defined and value_json.limits is defined else [] %}
           {% set fable = ls | selectattr('scope.model.display_name', 'eq', 'Fable') | list %}
           {% if fable and fable[0].percent is number %}{{ fable[0].percent | round(0) }}
-          {% else %}{{ ls[0].percent | round(0) }}{% endif %}
+          {%- else %}{{ ls[0].percent | round(0) }}{% endif %}
 
       # ---- Formatted reset times (local TZ) for the e-paper display ----
       - name: "Claude Usage Session Reset"

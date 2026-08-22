@@ -1,19 +1,81 @@
 - id: claude_usage_auth_failed_alert
-  alias: "Claude Usage - token auth failure alert"
-  description: "Backstop: notify if the usage token stays rejected 30 min (i.e. renewal itself is failing)."
+  alias: "Claude Usage - usage data stale alert"
+  description: >-
+    Backstop: notify if the panel has had no usage data for 45 min, WHATEVER the
+    reason. It used to watch auth_failed alone, and on 2026-08-22 that missed a
+    real dead token for seven hours: an expired token gets 429 rate_limit_error
+    from Anthropic, not 401, so the status sensor sat on rate_limited (flapping
+    to auth_failed and back) and this automation never fired. Adam found out from
+    the wall, with zero notifications raised. Watch every failure state instead.
+    no_token is deliberately excluded -- it is normal for a few minutes after a
+    Core restart and claude_usage_refresh_after_start already handles it.
   triggers:
     - trigger: state
       entity_id: sensor.claude_usage_status
-      to: "auth_failed"
-      for: "00:30:00"
+      to:
+        - "auth_failed"
+        - "rate_limited"
+        - "unknown"
+      for: "00:45:00"
   actions:
     - action: persistent_notification.create
       data:
         notification_id: claude_usage_token_dead
-        title: "Claude usage token dead"
+        title: "Claude usage panel has no data ({{ states(sensor.claude_usage_status) }})"
         message: >-
-          The e-paper usage token has been rejected for 30 min; renewal may be failing.
-          Re-mint with mint_claude_token.py and copy the JSON to /config/claude_usage/credentials.json.
+          sensor.claude_usage_status has been "{{ states(sensor.claude_usage_status) }}"
+          for 45 min, so the 2.9" panel is showing a fault instead of usage.
+          {% set d = states(sensor.claude_usage_chain_days_left) %}
+          {% if d not in [unknown, unavailable] and d | float(99) < 1 -%}
+          The OAuth refresh chain EXPIRED
+          ({{ state_attr(sensor.claude_usage_chain_days_left, expires_at) }}) --
+          auto-renewal cannot recover from this. Re-mint: run
+          scripts/mint_claude_token.py from ~/dev/home-assistant/esphome/claude-usage-epaper
+          and copy the JSON to /config/claude_usage/credentials.json.
+          {%- else -%}
+          The refresh chain is still valid
+          ({{ d }} days left), so this is NOT a re-mint case -- check the renewal
+          automation, then whether Anthropic is 429ing the usage endpoint.
+          {%- endif %}
+  mode: single
+- id: claude_usage_chain_expiry_warning
+  alias: "Claude Usage - warn before the OAuth chain expires"
+  description: >-
+    The refresh chain dies a fixed 30 days after the BROWSER mint and no amount
+    of auto-renewal extends it (verified 2026-08-22: the chain minted 2026-07-23
+    died on day 30.00 despite ~90 successful 4-hourly rotations). Only a human at
+    a browser can renew it, so the only useful thing an automation can do is say
+    so while there is still time. Checks daily and clears itself after a re-mint.
+  triggers:
+    - trigger: time
+      at: "09:00:00"
+    - trigger: state
+      entity_id: sensor.claude_usage_chain_days_left
+  conditions:
+    - "{{ states(sensor.claude_usage_chain_days_left) not in [unknown, unavailable] }}"
+  actions:
+    - choose:
+        - conditions:
+            - condition: numeric_state
+              entity_id: sensor.claude_usage_chain_days_left
+              below: 3
+          sequence:
+            - action: persistent_notification.create
+              data:
+                notification_id: claude_usage_chain_expiring
+                title: "Claude usage token: re-mint within {{ states(sensor.claude_usage_chain_days_left) | float(0) | round(1) }} days"
+                message: >-
+                  The OAuth refresh chain expires
+                  {{ state_attr(sensor.claude_usage_chain_days_left, expires_at) }}.
+                  Auto-renewal CANNOT extend it -- when it lapses the 2.9" panel
+                  goes to a fault screen until it is re-minted by hand.
+                  Run scripts/mint_claude_token.py from
+                  ~/dev/home-assistant/esphome/claude-usage-epaper, then copy the
+                  JSON to /config/claude_usage/credentials.json.
+      default:
+        - action: persistent_notification.dismiss
+          data:
+            notification_id: claude_usage_chain_expiring
   mode: single
 - id: claude_usage_token_renew
   alias: "Claude Usage - renew OAuth token"
@@ -90,7 +152,6 @@
             title: "Claude usage token renewal FAILED"
             message: "renew.py: {{ renew.stdout }} {{ renew.stderr }}. Re-mint if it persists."
   mode: single
-
 - id: claude_usage_refresh_after_start
   alias: "Claude Usage - re-poll once HA has settled"
   description: >-
@@ -112,3 +173,33 @@
       target:
         entity_id: sensor.claude_usage_status
   mode: single
+
+# ============================================================================
+# Home Assistant automations the sofa panel depends on.
+#
+# Deploy into the HA Green. Reload with:
+#   curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" \
+#     http://supervisor/core/api/services/automation/reload
+#
+# *** ONVIF MUST BE ENABLED ON EACH REOLINK CAMERA. ***
+# The Reolink integration exposes a person binary_sensor per camera, but those
+# events are only PUSH-driven when ONVIF is enabled on the camera itself
+# (Settings -> Network -> Advanced -> ONVIF, per camera). Without it the
+# integration falls back to polling and the "wake on approach" arrives several
+# seconds late — by which point whoever it was has already knocked.
+# ============================================================================
+
+# ---------------------------------------------------------------------------
+# WAKE ON APPROACH  (Phase 3)
+#
+# Front door person detection -> wake the panel, jump to the camera page,
+# promote that camera to fullscreen.
+#
+# The ESPHome side (`esphome.sofa_panel_wake_and_show_camera`) already exists
+# in esphome/packages/base.yaml. Its body is deliberately inert until Phase 3
+# wires the page jump, so this automation can be deployed and tested NOW —
+# it will log on the device rather than doing nothing observable.
+#
+# camera_index matches the cam_N_entity substitutions in sofa-panel.yaml:
+#   0 = front_door, 1 = driveway, 2 = garden, 3 = side_gate
+# ---------------------------------------------------------------------------

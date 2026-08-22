@@ -1,0 +1,38 @@
+# The refresh-chain expiry sensor. Add under `command_line:` in
+# configuration.yaml, alongside chain_expiry.py at /config/claude_usage/.
+# `command_line` is hot-reloadable once the domain exists (Developer Tools >
+# YAML > Command Line entities); adding the domain for the first time needs a
+# Core restart.
+command_line:
+  # ==========================================================================
+  # CLAUDE USAGE OAUTH REFRESH-CHAIN EXPIRY -- the one thing renew.py CANNOT fix.
+  #
+  # There are two clocks, and only one of them self-manages:
+  #   access token   8h      rotated by the 4h renew automation. Works.
+  #   refresh CHAIN  30 days FIXED from the original BROWSER mint. Rotating the
+  #                          refresh token does NOT extend it.
+  #
+  # Verified 2026-08-22: the chain minted 2026-07-23 10:37 BST expired exactly
+  # 30.00 days later, mid-cycle, after ~90 successful rotations. renew.py got
+  # `invalid_grant / Refresh token expired` and no retry could ever have helped.
+  # NOTES-internal.md's "one browser mint, ever" is really once a month.
+  #
+  # Nothing automatic can renew it -- OAuth authorization needs a human in a
+  # browser -- so the ONLY useful response is advance warning. Hence this sensor
+  # and automation claude_usage_chain_expiry_warning.
+  # ==========================================================================
+  - sensor:
+      name: "Claude Usage Chain Days Left"
+      unique_id: claude_usage_chain_days_left
+      command: "python3 /config/claude_usage/chain_expiry.py"
+      # Reads credentials.json only; no network, so it cannot be fooled by the
+      # 429s Anthropic's bot defence returns to the usage endpoint.
+      scan_interval: 3600
+      unit_of_measurement: "d"
+      icon: mdi:key-chain
+      # This sensor has a unit, so it may NOT hold a non-numeric state. Same trap
+      # the % sensors above fell into -- express "no data" with availability.
+      availability: "{{ value_json is defined and value_json.days_left is number }}"
+      value_template: "{{ value_json.days_left }}"
+      json_attributes:
+        - expires_at

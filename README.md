@@ -124,9 +124,16 @@ recreate them via the UI. To test immediately, run
 helper's value changed. From then on HA refreshes the token every 4
 hours (and within 10 minutes if it ever fails, e.g. after a long outage),
 writes the new one into the helper, and notifies you only if renewal itself
-fails (the fix is always the same: run the mint script again). The refresh
-token dies after about 30 days unused, so if you skip this step, plan to
-re-mint by hand instead.
+fails (the fix is always the same: run the mint script again).
+
+**Budget for a browser re-mint about once a month.** The refresh chain has a
+hard ~30-day life measured from the *original browser mint*, and rotating the
+refresh token does not extend it -- so auto-renewal keeps the 8-hour access
+token fresh but can never keep the chain alive. When it lapses the refresh
+returns `400 invalid_grant / Refresh token expired` and only re-running the
+mint script fixes it. `homeassistant/command_line.yaml` adds a sensor that
+reports the days remaining, and the matching automation warns you three days
+out, so the panel is not how you find out.
 
 ## Caveat
 
