@@ -5,10 +5,12 @@
     reason. It used to watch auth_failed alone, and on 2026-08-22 that missed a
     real dead token for seven hours: an expired token gets 429 rate_limit_error
     from Anthropic, not 401, so the status sensor sat on rate_limited (flapping
-    to auth_failed and back) and this automation never fired. Adam found out from
-    the wall, with zero notifications raised. Watch every failure state instead.
-    no_token is deliberately excluded -- it is normal for a few minutes after a
-    Core restart and claude_usage_refresh_after_start already handles it.
+    to auth_failed and back) and this automation never fired. Zero notifications
+    were raised and the wall panel was how anyone found out. Watch every failure
+    state instead. no_token is deliberately excluded -- it is normal for a few
+    minutes after a Core restart and claude_usage_refresh_after_start handles it.
+    This is now the ONLY self-heal signal: the house runs the static 1-year token
+    and nothing retries automatically.
   triggers:
     - trigger: state
       entity_id: sensor.claude_usage_status
@@ -21,137 +23,177 @@
     - action: persistent_notification.create
       data:
         notification_id: claude_usage_token_dead
-        title: "Claude usage panel has no data ({{ states(sensor.claude_usage_status) }})"
+        title: "Claude usage panel has no data ({{ states('sensor.claude_usage_status') }})"
         message: >-
-          sensor.claude_usage_status has been "{{ states(sensor.claude_usage_status) }}"
+          sensor.claude_usage_status has been "{{ states('sensor.claude_usage_status') }}"
           for 45 min, so the 2.9" panel is showing a fault instead of usage.
-          {% set d = states(sensor.claude_usage_chain_days_left) %}
-          {% if d not in [unknown, unavailable] and d | float(99) < 1 -%}
-          The OAuth refresh chain EXPIRED
-          ({{ state_attr(sensor.claude_usage_chain_days_left, expires_at) }}) --
-          auto-renewal cannot recover from this. Re-mint: run
-          scripts/mint_claude_token.py from ~/dev/home-assistant/esphome/claude-usage-epaper
-          and copy the JSON to /config/claude_usage/credentials.json.
+          {% set d = states('sensor.claude_usage_token_days_left') %}
+          {% if d not in ['unknown', 'unavailable'] and d | float(999) < 1 -%}
+          The access token EXPIRED
+          ({{ state_attr('sensor.claude_usage_token_days_left', 'expires_at') }}).
+          Nothing automatic renews it -- this house runs the static 1-year token.
+          Re-mint: ~/dev/home-assistant/scripts/remint-claude-usage.sh
           {%- else -%}
-          The refresh chain is still valid
-          ({{ d }} days left), so this is NOT a re-mint case -- check the renewal
-          automation, then whether Anthropic is 429ing the usage endpoint.
+          The token itself is still valid ({{ d }} days left, expires
+          {{ state_attr('sensor.claude_usage_token_days_left', 'expires_at') }}),
+          so this is NOT a re-mint case -- check whether Anthropic is 429ing the
+          usage endpoint, or whether the token was revoked early.
           {%- endif %}
   mode: single
 - id: claude_usage_chain_expiry_warning
-  alias: "Claude Usage - warn before the OAuth chain expires"
+  alias: "Claude Usage - warn before the token expires"
   description: >-
-    The refresh chain dies a fixed 30 days after the BROWSER mint and no amount
-    of auto-renewal extends it (verified 2026-08-22: the chain minted 2026-07-23
-    died on day 30.00 despite ~90 successful 4-hourly rotations). Only a human at
-    a browser can renew it, so the only useful thing an automation can do is say
-    so while there is still time. Checks daily and clears itself after a re-mint.
+    Nothing renews the access token -- this house runs the static 1-year token
+    and the refresh chain is deliberately left to lapse, because refreshing is
+    what downgrades a 1-year token to an 8h one. Only a human at a browser can
+    re-mint, so the only useful thing an automation can do is say so while there
+    is still time. Warns from 14 days out and clears itself after a re-mint.
+    ALSO fires the moment looks_rotated goes true, which means something
+    refreshed the chain and just cost eleven months.
   triggers:
     - trigger: time
       at: "09:00:00"
     - trigger: state
-      entity_id: sensor.claude_usage_chain_days_left
+      entity_id: sensor.claude_usage_token_days_left
   conditions:
-    - "{{ states(sensor.claude_usage_chain_days_left) not in [unknown, unavailable] }}"
+    - "{{ states('sensor.claude_usage_token_days_left') not in ['unknown', 'unavailable'] }}"
   actions:
     - choose:
         - conditions:
-            - condition: numeric_state
-              entity_id: sensor.claude_usage_chain_days_left
-              below: 3
+            - condition: or
+              conditions:
+                - condition: numeric_state
+                  entity_id: sensor.claude_usage_token_days_left
+                  below: 14
+                - condition: template
+                  value_template: "{{ state_attr('sensor.claude_usage_token_days_left', 'looks_rotated') | default(false) }}"
           sequence:
             - action: persistent_notification.create
               data:
                 notification_id: claude_usage_chain_expiring
-                title: "Claude usage token: re-mint within {{ states(sensor.claude_usage_chain_days_left) | float(0) | round(1) }} days"
+                title: >-
+                  {% if state_attr('sensor.claude_usage_token_days_left', 'looks_rotated') %}
+                  Claude usage token was ROTATED -- 1-year token lost
+                  {%- else %}
+                  Claude usage token: re-mint within {{ states('sensor.claude_usage_token_days_left') | float(0) | round(0) }} days
+                  {%- endif %}
                 message: >-
-                  The OAuth refresh chain expires
-                  {{ state_attr(sensor.claude_usage_chain_days_left, expires_at) }}.
-                  Auto-renewal CANNOT extend it -- when it lapses the 2.9" panel
+                  {% if state_attr('sensor.claude_usage_token_days_left', 'looks_rotated') -%}
+                  Something refreshed the chain, so the 1-year token has been
+                  revoked and replaced with an 8h one expiring
+                  {{ state_attr('sensor.claude_usage_token_days_left', 'expires_at') }}.
+                  Check that claude_usage_token_renew and claude_usage_token_retry
+                  are still commented out in automations.yaml, then re-mint.
+                  {%- else -%}
+                  The access token expires
+                  {{ state_attr('sensor.claude_usage_token_days_left', 'expires_at') }}
+                  and nothing automatic renews it -- when it lapses the 2.9" panel
                   goes to a fault screen until it is re-minted by hand.
-                  Run scripts/mint_claude_token.py from
-                  ~/dev/home-assistant/esphome/claude-usage-epaper, then copy the
-                  JSON to /config/claude_usage/credentials.json.
+                  {%- endif %}
+                  Run ~/dev/home-assistant/scripts/remint-claude-usage.sh
       default:
         - action: persistent_notification.dismiss
           data:
             notification_id: claude_usage_chain_expiring
   mode: single
-- id: claude_usage_token_renew
-  alias: "Claude Usage - renew OAuth token"
-  description: "Refresh the chain and write the new bearer into input_text.claude_oauth_bearer. Runs on a 4h cycle and immediately if the token is rejected for 10 min (e.g. HA was off > 8h). mode: single so only one renew runs at a time (the refresh_token rotates; concurrent renews would invalidate each other). No rest.reload (repeated reloads wedge the REST integration)."
-  # stored_traces: 0 because the renew response (with the bearer token) is
-  # captured in response_variable and would otherwise land in the trace.
-  trace:
-    stored_traces: 0
-  triggers:
-    - trigger: time_pattern
-      hours: "/4"
-      minutes: "7"
-    - trigger: state
-      entity_id: sensor.claude_usage_status
-      to: "auth_failed"
-      for: "00:02:00"
-  actions:
-    - action: shell_command.claude_usage_renew
-      response_variable: renew
-    - choose:
-        - conditions: "{{ renew.returncode == 0 and 'BEARER=' in renew.stdout }}"
-          sequence:
-            - action: input_text.set_value
-              target:
-                entity_id: input_text.claude_oauth_bearer
-              data:
-                value: "{{ renew.stdout.split('BEARER=')[1] | trim }}"
-            - action: homeassistant.update_entity
-              target:
-                entity_id: sensor.claude_usage_status
-            - action: persistent_notification.dismiss
-              data:
-                notification_id: claude_usage_renew_failed
-      default:
-        - action: persistent_notification.create
-          data:
-            notification_id: claude_usage_renew_failed
-            title: "Claude usage token renewal FAILED"
-            message: "renew.py: {{ renew.stdout }} {{ renew.stderr }}. Re-mint if it persists."
-  mode: single
-- id: claude_usage_token_retry
-  alias: "Claude Usage - retry renew while auth failed"
-  description: "Re-attempt renewal every 30 min while the token is still rejected, so a failed auto-heal doesn't wait 4h for the next cycle."
-  # stored_traces: 0 because the renew response (with the bearer token) is
-  # captured in response_variable and would otherwise land in the trace.
-  trace:
-    stored_traces: 0
-  triggers:
-    - trigger: time_pattern
-      minutes: "/30"
-  conditions:
-    - "{{ states('sensor.claude_usage_status') == 'auth_failed' }}"
-  actions:
-    - action: shell_command.claude_usage_renew
-      response_variable: renew
-    - choose:
-        - conditions: "{{ renew.returncode == 0 and 'BEARER=' in renew.stdout }}"
-          sequence:
-            - action: input_text.set_value
-              target:
-                entity_id: input_text.claude_oauth_bearer
-              data:
-                value: "{{ renew.stdout.split('BEARER=')[1] | trim }}"
-            - action: homeassistant.update_entity
-              target:
-                entity_id: sensor.claude_usage_status
-            - action: persistent_notification.dismiss
-              data:
-                notification_id: claude_usage_renew_failed
-      default:
-        - action: persistent_notification.create
-          data:
-            notification_id: claude_usage_renew_failed
-            title: "Claude usage token renewal FAILED"
-            message: "renew.py: {{ renew.stdout }} {{ renew.stderr }}. Re-mint if it persists."
-  mode: single
+# ===========================================================================
+# DISABLED 2026-08-22 -- these two REVOKE the long-lived token, by design.
+#
+# The house runs the STATIC 1-YEAR token now, not the self-renewing chain.
+# mint_claude_token.py asks for expires_in=31536000 and Anthropic grants it,
+# with scope user:profile -- everything the usage endpoint needs. But a refresh
+# revokes the current access token and hands back an 8h one, so leaving these
+# enabled turns a 1-year token into an 8h token roughly four hours after every
+# mint. That is exactly what happened at 20:07 BST today.
+#
+# Why the July decision flipped: NOTES-internal.md rejected the static plan
+# because "the refresh token only lives ~30 days". True, but it only matters if
+# you USE the chain. The access token's own life is independent of it. The 30-day
+# wall was measured for the first time this morning, when it took the panel down.
+#
+# Trade: no self-heal. Accepted -- today's failure needed hands either way, and
+# automation claude_usage_auth_failed_alert now catches any silent death within
+# 45 min, which is the gap that let this run unnoticed for seven hours.
+#
+# TO GO BACK to the self-renewing design: uncomment both blocks, reload
+# automations, and re-mint (the chain is dead by then). Both are preserved
+# verbatim in git and in Pharkie/claude-usage-epaper.
+# ===========================================================================
+# - id: claude_usage_token_renew
+#   alias: "Claude Usage - renew OAuth token"
+#   description: "Refresh the chain and write the new bearer into input_text.claude_oauth_bearer. Runs on a 4h cycle and immediately if the token is rejected for 10 min (e.g. HA was off > 8h). mode: single so only one renew runs at a time (the refresh_token rotates; concurrent renews would invalidate each other). No rest.reload (repeated reloads wedge the REST integration)."
+#   # stored_traces: 0 because the renew response (with the bearer token) is
+#   # captured in response_variable and would otherwise land in the trace.
+#   trace:
+#     stored_traces: 0
+#   triggers:
+#     - trigger: time_pattern
+#       hours: "/4"
+#       minutes: "7"
+#     - trigger: state
+#       entity_id: sensor.claude_usage_status
+#       to: "auth_failed"
+#       for: "00:02:00"
+#   actions:
+#     - action: shell_command.claude_usage_renew
+#       response_variable: renew
+#     - choose:
+#         - conditions: "{{ renew.returncode == 0 and 'BEARER=' in renew.stdout }}"
+#           sequence:
+#             - action: input_text.set_value
+#               target:
+#                 entity_id: input_text.claude_oauth_bearer
+#               data:
+#                 value: "{{ renew.stdout.split('BEARER=')[1] | trim }}"
+#             - action: homeassistant.update_entity
+#               target:
+#                 entity_id: sensor.claude_usage_status
+#             - action: persistent_notification.dismiss
+#               data:
+#                 notification_id: claude_usage_renew_failed
+#       default:
+#         - action: persistent_notification.create
+#           data:
+#             notification_id: claude_usage_renew_failed
+#             title: "Claude usage token renewal FAILED"
+#             message: "renew.py: {{ renew.stdout }} {{ renew.stderr }}. Re-mint if it persists."
+#   mode: single
+# - id: claude_usage_token_retry
+#   alias: "Claude Usage - retry renew while auth failed"
+#   description: "Re-attempt renewal every 30 min while the token is still rejected, so a failed auto-heal doesn't wait 4h for the next cycle."
+#   # stored_traces: 0 because the renew response (with the bearer token) is
+#   # captured in response_variable and would otherwise land in the trace.
+#   trace:
+#     stored_traces: 0
+#   triggers:
+#     - trigger: time_pattern
+#       minutes: "/30"
+#   conditions:
+#     - "{{ states('sensor.claude_usage_status') == 'auth_failed' }}"
+#   actions:
+#     - action: shell_command.claude_usage_renew
+#       response_variable: renew
+#     - choose:
+#         - conditions: "{{ renew.returncode == 0 and 'BEARER=' in renew.stdout }}"
+#           sequence:
+#             - action: input_text.set_value
+#               target:
+#                 entity_id: input_text.claude_oauth_bearer
+#               data:
+#                 value: "{{ renew.stdout.split('BEARER=')[1] | trim }}"
+#             - action: homeassistant.update_entity
+#               target:
+#                 entity_id: sensor.claude_usage_status
+#             - action: persistent_notification.dismiss
+#               data:
+#                 notification_id: claude_usage_renew_failed
+#       default:
+#         - action: persistent_notification.create
+#           data:
+#             notification_id: claude_usage_renew_failed
+#             title: "Claude usage token renewal FAILED"
+#             message: "renew.py: {{ renew.stdout }} {{ renew.stderr }}. Re-mint if it persists."
+#   mode: single
 - id: claude_usage_refresh_after_start
   alias: "Claude Usage - re-poll once HA has settled"
   description: >-

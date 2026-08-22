@@ -126,14 +126,30 @@ hours (and within 10 minutes if it ever fails, e.g. after a long outage),
 writes the new one into the helper, and notifies you only if renewal itself
 fails (the fix is always the same: run the mint script again).
 
-**Budget for a browser re-mint about once a month.** The refresh chain has a
-hard ~30-day life measured from the *original browser mint*, and rotating the
-refresh token does not extend it -- so auto-renewal keeps the 8-hour access
-token fresh but can never keep the chain alive. When it lapses the refresh
-returns `400 invalid_grant / Refresh token expired` and only re-running the
-mint script fixes it. `homeassistant/command_line.yaml` adds a sensor that
-reports the days remaining, and the matching automation warns you three days
-out, so the panel is not how you find out.
+### Two designs, and the trade between them
+
+The refresh chain has a hard ~30-day life measured from the *original browser
+mint*, and rotating the refresh token does not extend it -- each rotation issues
+a new refresh token carrying the same deadline. When it lapses the refresh
+returns `400 invalid_grant / Refresh token expired` and only the mint script
+fixes it. So the auto-renewing setup above needs **a browser re-mint every
+month**.
+
+The alternative: `mint_claude_token.py` asks for `expires_in=31536000` and
+Anthropic grants a **1-year** access token with `user:profile`. If you never
+refresh it, you re-mint **once a year** instead. The catch is that a refresh
+*revokes* the current access token and hands back an 8-hour one, so the two are
+mutually exclusive -- leaving the renewal automations enabled turns a 1-year
+token into an 8-hour token within four hours of every mint.
+
+To run the static version, skip the two renewal automations entirely (they are
+kept commented in `homeassistant/automations.yaml`). Caveat worth stating
+plainly: **whether Anthropic honours a 1-year `expires_in` for the full year is
+unverified** -- the endpoint grants it, but nobody has yet let one run to term.
+Either way `homeassistant/command_line.yaml` adds a sensor reporting the days
+remaining plus a `looks_rotated` flag, and the matching automation warns you
+before expiry and shouts immediately if something refreshes a token you meant
+to keep.
 
 ## Caveat
 
