@@ -1,3 +1,7 @@
+# NOTE: this is the published copy. The live automations on the author's HA
+# instance name a private wrapper script at those two "Re-mint:" lines; here they
+# name the mint script in this repo instead. That divergence is deliberate -- do
+# not "fix" it back when syncing from a running system.
 - id: claude_usage_auth_failed_alert
   alias: "Claude Usage - usage data stale alert"
   description: >-
@@ -32,7 +36,8 @@
           The access token EXPIRED
           ({{ state_attr('sensor.claude_usage_token_days_left', 'expires_at') }}).
           Nothing automatic renews it -- this house runs the static 1-year token.
-          Re-mint: ~/dev/home-assistant/scripts/remint-claude-usage.sh
+          Re-mint: run scripts/mint_claude_token.py and copy the JSON to
+          /config/claude_usage/credentials.json
           {%- else -%}
           The token itself is still valid ({{ d }} days left, expires
           {{ state_attr('sensor.claude_usage_token_days_left', 'expires_at') }}),
@@ -90,7 +95,8 @@
                   and nothing automatic renews it -- when it lapses the 2.9" panel
                   goes to a fault screen until it is re-minted by hand.
                   {%- endif %}
-                  Run ~/dev/home-assistant/scripts/remint-claude-usage.sh
+                  Run scripts/mint_claude_token.py and copy the JSON to
+                  /config/claude_usage/credentials.json
       default:
         - action: persistent_notification.dismiss
           data:
