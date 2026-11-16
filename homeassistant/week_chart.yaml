@@ -1,0 +1,129 @@
+# ---------------------------------------------------------------------------
+# Week chart: everything the panel's week chart needs, worked out in HA so the
+# ESP only draws. A Home Assistant PACKAGE: drop it in /config/packages/ (with
+# `homeassistant: packages: !include_dir_named packages/`), then reload
+# template entities. No Core restart needed.
+#
+# Why the week is the whole panel now: Anthropic dropped the five-hour session
+# limit for verified Ultra accounts on 2026-10-30, so the only limit left is
+# the weekly one. The useful question is no longer "how much have I used" but
+# "will it last until the reset", and that needs the SHAPE of the week.
+#
+# sensor.claude_usage_week_chart
+#   state           the strip under the chart: "19% ahead of pace · 9%/day left"
+#   points          this week's usage, one value per hour since the reset,
+#                   space-separated, "-" for an hour with no reading. The ESP
+#                   carries the last value forward over gaps. Spaces, not
+#                   commas: HA parses an attribute that looks like a Python
+#                   literal, and "0,2,3" would come back as a tuple.
+#   week_start      unix time the week began (resets_at minus 7 days)
+#   hour            hours since week_start, 0-167: where "now" sits
+#   run_out         hour of the week at which, at the last 24 h's rate, usage
+#                   reaches 100%; -1 if it doesn't before the reset
+#   run_out_label   that moment, local, rounded to the hour: "Fri 23:00"
+#   proj_end        % at the reset at that rate (capped at 100), -1 if unknown
+#   alarm           "on" when run_out lands before the reset: the panel
+#                   inverts the strip. "on"/"off" strings, not a boolean, so
+#                   the ESP's text sensor gets a stable value.
+#   time_left       "3d 11h", "11h", "<1h"
+#   reset_label     "Mon 01:00"
+#   days            first letters of the seven days from week_start: "MTWTFSS"
+#
+# The rate is the LAST 24 HOURS, not the week's average. Early in the week the
+# average swings wildly (12% in the first 12 h projects to 164%), and a quiet
+# night should pull the run-out back. Before 24 h of history it falls back to
+# the week-so-far average, and before 6 h it does not project at all.
+#
+# History lives in this sensor's own `points` attribute. Trigger-based template
+# entities restore their attributes across restarts, which is what makes that
+# safe; a gap (HA down) shows as "-" hours that the ESP bridges.
+#
+# resets_at jitters by milliseconds between polls (.024094 vs .417622 on the
+# same reset), so it is rounded to the hour before anything compares it.
+# ---------------------------------------------------------------------------
+template:
+  - triggers:
+      - trigger: state
+        entity_id: sensor.claude_usage_week
+      - trigger: time_pattern
+        minutes: "/1"
+      - trigger: homeassistant
+        event: start
+    variables:
+      me: sensor.claude_usage_week_chart
+      wk: "{{ states('sensor.claude_usage_week') | int(-1) }}"
+      rt: >-
+        {%- set t = as_timestamp(state_attr('sensor.claude_usage_week', 'resets_at'), 0) -%}
+        {{ ((t / 3600) | round(0) * 3600) | int if t else 0 }}
+      ws: "{{ (rt - 7 * 86400) if rt else (state_attr(me, 'week_start') | int(0)) }}"
+      nowts: "{{ now().timestamp() }}"
+      hf: "{{ ((nowts - ws) / 3600) if ws else -1 }}"
+      h: "{{ [[hf | int(0), 0] | max, 167] | min }}"
+      points: >-
+        {%- set raw = state_attr(me, 'points') | default('', true) | string -%}
+        {%- if not ws -%}{{ raw }}
+        {%- else -%}
+          {%- set old = raw.split(' ') if raw and (state_attr(me, 'week_start') | int(0)) == ws else [] -%}
+          {%- set ns = namespace(out=[]) -%}
+          {%- for i in range(h + 1) -%}
+            {%- set o = old[i] if i < old | length else '-' -%}
+            {%- if i == h and wk >= 0 -%}{%- set o = wk | string -%}{%- endif -%}
+            {%- set ns.out = ns.out + [o] -%}
+          {%- endfor -%}
+          {{ ns.out | join(' ') }}
+        {%- endif -%}
+      v24: >-
+        {%- set p = (points | string).split(' ') -%}
+        {%- set ns = namespace(v=-1) -%}
+        {%- for i in range([h - 23, 0] | max) -%}
+          {%- if p[i] is defined and p[i] != '-' -%}{%- set ns.v = p[i] | int(-1) -%}{%- endif -%}
+        {%- endfor -%}
+        {{ ns.v if h >= 24 else -1 }}
+      rate: >-
+        {%- if wk < 0 or hf < 0 -%}-1
+        {%- elif v24 >= 0 -%}{{ [(wk - v24) / 24, 0] | max }}
+        {%- elif hf >= 6 -%}{{ wk / hf }}
+        {%- else -%}-1{%- endif -%}
+      hl: "{{ ((ws + 7 * 86400 - nowts) / 3600) if ws else -1 }}"
+      run_out: >-
+        {%- if rate > 0 and 0 <= wk < 100 -%}
+          {%- set ro = hf + (100 - wk) / rate -%}
+          {{ (ro | round(1)) if ro < 168 else -1 }}
+        {%- else -%}-1{%- endif -%}
+      proj_end: >-
+        {%- if rate >= 0 and wk >= 0 and hl >= 0 -%}
+          {{ ([wk + rate * hl, 100] | min) | round(0) | int }}
+        {%- else -%}-1{%- endif -%}
+      ahead: "{{ (wk - hf / 168 * 100) | round(0) | int if wk >= 0 and hf >= 0 else 0 }}"
+    sensor:
+      - name: "Claude Usage Week Chart"
+        unique_id: claude_usage_week_chart
+        icon: mdi:chart-timeline-variant
+        state: >-
+          {%- if wk < 0 or hl < 0 -%}No usage data
+          {%- elif wk >= 100 -%}Limit reached · resets {{ (ws + 7 * 86400) | timestamp_custom('%a %H:%M') }}
+          {%- else -%}
+            {%- if ahead >= 3 -%}{{ ahead }}% ahead of pace
+            {%- elif ahead <= -3 -%}{{ -ahead }}% under pace
+            {%- else -%}On pace{%- endif -%}
+            {{- ' · ' -}}
+            {%- if hl >= 24 -%}{{ ((100 - wk) / (hl / 24)) | round(0) | int }}%/day left
+            {%- else -%}{{ 100 - wk }}% left{%- endif -%}
+          {%- endif -%}
+        attributes:
+          points: "{{ points }}"
+          week_start: "{{ ws }}"
+          hour: "{{ h }}"
+          run_out: "{{ run_out }}"
+          run_out_label: >-
+            {{ ((ws + (run_out | round(0)) * 3600) | timestamp_custom('%a %H:%M')) if run_out >= 0 else '' }}
+          proj_end: "{{ proj_end }}"
+          alarm: "{{ 'on' if run_out >= 0 or wk >= 100 else 'off' }}"
+          time_left: >-
+            {%- if hl < 0 -%}
+            {%- elif hl >= 24 -%}{{ (hl // 24) | int }}d {{ (hl % 24) | int }}h
+            {%- elif hl >= 1 -%}{{ hl | int }}h
+            {%- else -%}<1h{%- endif -%}
+          reset_label: "{{ ((ws + 7 * 86400) | timestamp_custom('%a %H:%M')) if ws else '' }}"
+          days: >-
+            {%- for d in range(7) -%}{{ ((ws + d * 86400) | timestamp_custom('%a'))[0] }}{%- endfor -%}
