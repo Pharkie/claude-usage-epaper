@@ -158,6 +158,13 @@ time. The shape already changed once (mid-2026, when per-model usage moved into
 a `limits[]` array). If it changes again the templates fall back to `unknown`
 and the panel shows `--`, rather than showing wrong numbers.
 
+Accounts with no five-hour limit get a `null` session. Anthropic dropped that
+limit for verified Ultra (formerly Max 20x) accounts on 2026-10-30, and the
+endpoint now returns `five_hour: null` for them. The Session row then shows
+`--` with "No limit" in place of a reset time, and the Week and per-model rows
+carry on. Before this fix the status sensor needed `five_hour` to call a
+response good, so these accounts read as a fault.
+
 If you're adapting it: the per-model row picks the first `weekly_scoped` limit
 on your account (rename the label in the display lambda if it's not Fable). For
 another board, change `board`/`variant` and the `internal_led` pin, remove the

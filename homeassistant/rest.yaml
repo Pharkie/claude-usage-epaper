@@ -20,7 +20,15 @@
 #
 # claude_usage_status is deliberately granular, because these need different
 # reactions and only ONE of them wants the user to re-mint:
-#   ok           - got usage data
+#   ok           - got usage data: five_hour, seven_day OR limits[]. Not
+#                  five_hour alone: Anthropic dropped the five-hour session
+#                  limit for verified Ultra (ex-Max 20x) accounts on
+#                  2026-10-30, and from then on the endpoint answers 200 with
+#                  `five_hour: null` and no `session` entry in limits[]. The
+#                  old test required five_hour, so a perfectly good response
+#                  read as `unknown` for weeks and the stale alert blamed the
+#                  token. Session then shows "--" and its reset line says
+#                  "No limit"; Week and Fable carry on.
 #   no_token     - input_text.claude_oauth_bearer isn't populated. Normal for a
 #                  few minutes after a Core restart: the REST poll can fire
 #                  before the helper restores, sending an empty Authorization
@@ -70,7 +78,9 @@ rest:
         value_template: >
           {% set bearer = states('input_text.claude_oauth_bearer') %}
           {% if not bearer.startswith('Bearer ') %}no_token
-          {%- elif value_json is defined and value_json.five_hour is defined and value_json.five_hour %}ok
+          {%- elif value_json is defined and ((value_json.five_hour is defined and value_json.five_hour)
+                or (value_json.seven_day is defined and value_json.seven_day)
+                or (value_json.limits is defined and value_json.limits)) %}ok
           {%- elif value_json is defined and value_json.error is defined and value_json.error.type is defined %}
           {{- ' rate_limited' if value_json.error.type == 'rate_limit_error' else ' auth_failed' }}
           {%- else %}unknown{% endif %}
@@ -123,8 +133,11 @@ rest:
         unique_id: claude_usage_session_reset
         icon: mdi:clock-end
         value_template: >
-          {% if value_json is defined and value_json.five_hour and value_json.five_hour.resets_at %}
+          {% if value_json is defined and value_json.five_hour is defined
+                and value_json.five_hour and value_json.five_hour.resets_at %}
           Resets {{ as_timestamp(value_json.five_hour.resets_at) | timestamp_custom('%H:%M') }}
+          {%- elif value_json is defined and value_json.five_hour is defined and value_json.five_hour is none
+                and value_json.seven_day is defined and value_json.seven_day %}No limit
           {%- else %}unknown{% endif %}
 
       - name: "Claude Usage Week Reset"
