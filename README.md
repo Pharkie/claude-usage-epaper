@@ -1,13 +1,17 @@
 # ESPHome + Home Assistant: Claude Code usage on a 2.9" e-paper display
 
-Your Claude Code usage on a small e-paper panel: session, weekly and per-model
-limits, the same numbers `/usage` shows in Claude Code, with the reset time
-under each bar. Home Assistant polls the numbers and pushes them to the display,
-so it keeps updating with your computer off.
+Your Claude Code weekly usage on a small e-paper panel, drawn as a chart of
+the week: how much you've used, whether you're ahead of an even pace, and when
+you'll run out if you carry on at the last day's rate. The numbers are the ones
+`/usage` shows in Claude Code. Home Assistant polls them and pushes them to the
+display, so it keeps updating with your computer off.
 
 It puts your usage in one place without taking up any screen space, and it
 covers everything that counts against your limits: Claude Code on desktop, the
-phone app and the web all draw from the same session and weekly caps.
+phone app and the web all draw from the same weekly cap.
+
+The photos show the earlier layout (session, weekly and Fable bars), from
+before Anthropic dropped the five-hour limit for Ultra accounts.
 
 <p>
 <img src="images/front.jpeg" width="49%" alt="Front view, the inverted 85% is the 80%+ warning" />
@@ -16,18 +20,23 @@ phone app and the web all draw from the same session and weekly caps.
 
 ## What you get
 
-- Session, weekly and per-model bars, each with its reset time.
+- The week so far as a curve, Monday to Sunday (or wherever your week starts),
+  against a dashed even-pace diagonal, so ahead or behind shows from across
+  the room.
+- A dashed projection at the last 24 hours' rate. If it reaches 100% before
+  the reset, an X marks where, labelled "runs out Fri 23:00".
+- A strip underneath: "19% ahead of pace · 9%/day left". It goes black only
+  when the projection runs out before the reset, so black means act now.
+- The week's %, the time to reset and the reset moment in a column on the left.
 - Redraws within a minute of Home Assistant's numbers changing (HA polls the API
   every 5 minutes). It only redraws when something actually changed, so the panel
   isn't flashing all day.
 - Keeps working with your computer off, because Home Assistant does the polling.
   Phone and web usage count against the same limits, so the numbers stay right
   either way.
-- Any bar at 80% or over flips to white-on-black, so it's readable across the
-  room (that's the 85% in the photo).
 - It won't show stale or made-up numbers: a full-screen TOKEN EXPIRED banner if
-  auth fails, a stale-data note if Home Assistant or the API drops out, and
-  dashes rather than a fake zero when a value is missing.
+  auth fails, and the strip says "chart may be stale" (inverted) if Home
+  Assistant or the API drops out.
 - Renews its own API token every 4 hours, so after setup you don't touch it.
 
 ## Hardware
@@ -58,8 +67,10 @@ flowchart LR
 
 Home Assistant polls `https://api.anthropic.com/api/oauth/usage`, the
 undocumented endpoint behind Claude Code's own `/usage` screen, and exposes
-the numbers as sensors. The ESP subscribes to them over the native API and
-draws the bars.
+the numbers as sensors. A template sensor (`homeassistant/week_chart.yaml`)
+keeps the week's usage one value per hour and works out the pace, the run-out
+time and the strip text, so the ESP subscribes over the native API and only
+draws.
 
 ## Setup
 
@@ -89,19 +100,21 @@ non-obvious (scope requirements, and a User-Agent bot filter that fakes
 - The sensor polls every 5 minutes, so after pasting the token either wait or
   force it now with Developer Tools > Actions > `homeassistant.update_entity` on
   `sensor.claude_usage_status`.
-- Check Developer Tools > States: `sensor.claude_usage_session` and friends
-  should be numbers, and `sensor.claude_usage_status` should be `ok`. The other
+- Copy `homeassistant/week_chart.yaml` into `/config/packages/` (it is a
+  package; you need `homeassistant: packages: !include_dir_named packages/`
+  in `configuration.yaml`) and reload template entities, or restart.
+- Check Developer Tools > States: `sensor.claude_usage_week` should be a
+  number, `sensor.claude_usage_week_chart` a sentence like "On pace · 14%/day
+  left", and `sensor.claude_usage_status` should be `ok`. The other
   states: `auth_failed` = token rejected (re-check the helper value starts with
   `Bearer ` including the space, or re-mint); `unknown` = the request failed or
   the response shape changed; `rate_limited` = temporary API rate limit.
 
 ### 3. ESPHome
 
-- Use the `esphome/` dir as your device dir (`firebeetle2-29.yaml` plus
-  `includes/text_utils.h`); add `fonts/materialdesignicons-webfont.ttf`
-  ([download](https://github.com/Templarian/MaterialDesign-Webfont/raw/master/fonts/materialdesignicons-webfont.ttf))
-  as `esphome/fonts/`. Montserrat fetches automatically from Google Fonts at
-  build time.
+- Use the `esphome/` dir as your device dir (`firebeetle2-29.yaml` plus the
+  headers in `includes/`). Montserrat fetches automatically from Google Fonts
+  at build time; nothing else to download.
 - Install the ESPHome CLI first (`pip install esphome`, or the uv equivalent);
   the first flash is over USB, later updates are OTA.
 - Create `esphome/secrets.yaml` with `wifi_ssid`, `wifi_password`,
@@ -160,10 +173,10 @@ and the panel shows `--`, rather than showing wrong numbers.
 
 Accounts with no five-hour limit get a `null` session. Anthropic dropped that
 limit for verified Ultra (formerly Max 20x) accounts on 2026-10-30, and the
-endpoint now returns `five_hour: null` for them. The Session row then shows
-`--` with "No limit" in place of a reset time, and the Week and per-model rows
-carry on. Before this fix the status sensor needed `five_hour` to call a
-response good, so these accounts read as a fault.
+endpoint now returns `five_hour: null` for them. That is why the panel shows
+only the week. The session sensors are still in `rest.yaml` (the session one
+goes unavailable and its reset sensor says "No limit") if your account still
+has the limit and you want to draw it.
 
 If you're adapting it: the per-model row picks the first `weekly_scoped` limit
 on your account (rename the label in the display lambda if it's not Fable). For
