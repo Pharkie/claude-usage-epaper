@@ -1,13 +1,17 @@
 # Claude Code usage on a 2.9" e-paper display (ESPHome + Home Assistant)
-# Shows Session / Weekly all-models / Weekly per-model (e.g. Fable) usage bars
-# with reset times, on a FireBeetle 2 ESP32-C6 + Waveshare 2.90" V2 (B/W) panel.
+# Shows the week as a chart: usage so far against an even-pace line, where it
+# runs out at the last 24 h's rate, and how much a day is left, on a
+# FireBeetle 2 ESP32-C6 + Waveshare 2.90" V2 (B/W) panel. (It showed Session,
+# Week and Fable bars until Anthropic dropped the five-hour limit for Ultra
+# accounts on 2026-10-30; the week is the only limit left.)
 # Setup instructions: see README.md in the repo.
 #
 # Mains-powered: no deep sleep. Redraws ONLY when displayed data changes
 # (checked every 60s), plus an occasional safety refresh, so the full-refresh
 # flash happens when a % ticks, not every 5 minutes.
 # Data comes from Home Assistant REST sensors polling
-# https://api.anthropic.com/api/oauth/usage (see README.md).
+# https://api.anthropic.com/api/oauth/usage, and the chart's history, pace and
+# run-out from homeassistant/week_chart.yaml (see README.md).
 #
 # Author: Adam Knowles
 
@@ -30,12 +34,10 @@ substitutions:
     {"WiFi", id(wifi_status).is_connected()},
     {"HA API", id(api_status).is_connected()},
     {"Time", id(homeassistant_time).now().is_valid()},
-    {"Session usage", id(session_pct).has_state() &&
-                      !isnan(id(session_pct).state)},
     {"Week usage", id(week_pct).has_state() &&
                    !isnan(id(week_pct).state)},
-    {"Fable usage", id(fable_pct).has_state() &&
-                    !isnan(id(fable_pct).state)},
+    {"Week chart", id(chart_points).has_state() &&
+                   id(chart_hour).has_state()},
 
 # Inlined basics (were a shared include in the original project)
 safe_mode:
@@ -98,6 +100,7 @@ esphome:
   includes:
     - includes/text_utils.h # Include the text utilities
     - includes/status_banner.h # Full-screen status banner (distinct per fault)
+    - includes/week_chart.h # The week chart itself
 
   # Boot: wait (max 20s) until everything the dashboard needs has arrived,
   # then draw ONCE. No intermediate status draw, saves a full 3-4s refresh.
@@ -178,18 +181,24 @@ script:
   - id: compute_sig
     then:
       - lambda: |-
-          char sig[160];
           // NB: bare id(x) yields a raw pointer in ESPHome lambdas, so the
           // helper must take a pointer (HomeassistantSensor* upcasts fine).
-          auto pct_of = [](esphome::sensor::Sensor *s) -> int {
-            return (s->has_state() && !isnan(s->state)) ? (int)(s->state + 0.5f) : -1;
+          auto num_of = [](esphome::sensor::Sensor *s) -> std::string {
+            return (s->has_state() && !isnan(s->state))
+                       ? std::to_string((int) lroundf(s->state)) : std::string("-");
           };
-          snprintf(sig, sizeof(sig), "%d|%d|%d|%s|%s|%s|%s|%d",
-                   pct_of(id(session_pct)), pct_of(id(week_pct)), pct_of(id(fable_pct)),
-                   id(session_reset).state.c_str(), id(week_reset).state.c_str(),
-                   id(fable_reset).state.c_str(), id(usage_status).state.c_str(),
-                   id(api_status).is_connected() ? 1 : 0);
-          id(pending_sig) = sig;
+          // Everything the chart draws. The hour moves "now" along the chart,
+          // so this changes at most hourly plus whenever usage ticks; the
+          // points hash catches a history rewrite with no other change.
+          id(pending_sig) =
+              num_of(id(week_pct)) + "|" + num_of(id(chart_hour)) + "|" +
+              num_of(id(chart_run_out)) + "|" + num_of(id(chart_proj_end)) + "|" +
+              id(chart_strip).state + "|" + id(chart_alarm).state + "|" +
+              id(chart_out_label).state + "|" + id(chart_time_left).state + "|" +
+              id(chart_reset).state + "|" + id(chart_days).state + "|" +
+              std::to_string((unsigned) std::hash<std::string>{}(id(chart_points).state)) + "|" +
+              id(usage_status).state + "|" +
+              (id(api_status).is_connected() ? "1" : "0");
   - id: update_screen
     mode: restart
     then:
@@ -225,8 +234,8 @@ interval:
             id(drawn_sig) = id(pending_sig);
             id(update_screen).execute();
           }
-  # Occasional anti-ghost/liveness refresh only (full_update_every:1 already
-  # clears ghosting on each redraw); also keeps the Updated stamp honest.
+  # Occasional anti-ghost refresh only (full_update_every:1 already clears
+  # ghosting on each redraw).
   - interval: 6h
     then:
       - script.execute: update_screen
@@ -242,22 +251,28 @@ sensor:
   # internal: false so the device re-exports them: what the ESP *thinks* the
   # values are is then visible in HA, invaluable for debugging.
   - platform: homeassistant
-    name: "Claude Session"
-    entity_id: sensor.claude_usage_session
-    id: session_pct
-    internal: false
-
-  - platform: homeassistant
     name: "Claude Week"
     entity_id: sensor.claude_usage_week
     id: week_pct
     internal: false
 
+  # ---- The week chart, worked out by homeassistant/week_chart.yaml ----
+  # Attributes of sensor.claude_usage_week_chart; internal (the default for
+  # this platform) because they only matter to the drawing.
   - platform: homeassistant
-    name: "Claude Fable"
-    entity_id: sensor.claude_usage_fable
-    id: fable_pct
-    internal: false
+    entity_id: sensor.claude_usage_week_chart
+    attribute: hour
+    id: chart_hour
+
+  - platform: homeassistant
+    entity_id: sensor.claude_usage_week_chart
+    attribute: run_out
+    id: chart_run_out
+
+  - platform: homeassistant
+    entity_id: sensor.claude_usage_week_chart
+    attribute: proj_end
+    id: chart_proj_end
 
   # ---- Battery (kept in case the LiPo is left connected) ----
   - platform: adc
@@ -335,25 +350,45 @@ text_sensor:
     id: usage_status
     internal: false
 
-  # Formatted reset times, pre-rendered by HA in local TZ ("Resets 03:50",
-  # "Resets Mon 02:00") so the ESP just prints strings.
+  # The strip under the chart ("19% ahead of pace · 9%/day left"), exported
+  # so what the panel is showing can be read in HA.
   - platform: homeassistant
-    name: "Session Reset"
-    entity_id: sensor.claude_usage_session_reset
-    id: session_reset
+    name: "Week Chart Strip"
+    entity_id: sensor.claude_usage_week_chart
+    id: chart_strip
     internal: false
 
+  # The week's hourly history. Internal and must stay so: it runs past HA's
+  # 255-character state limit late in the week.
   - platform: homeassistant
-    name: "Week Reset"
-    entity_id: sensor.claude_usage_week_reset
-    id: week_reset
-    internal: false
+    entity_id: sensor.claude_usage_week_chart
+    attribute: points
+    id: chart_points
 
   - platform: homeassistant
-    name: "Fable Reset"
-    entity_id: sensor.claude_usage_fable_reset
-    id: fable_reset
-    internal: false
+    entity_id: sensor.claude_usage_week_chart
+    attribute: alarm
+    id: chart_alarm
+
+  - platform: homeassistant
+    entity_id: sensor.claude_usage_week_chart
+    attribute: run_out_label
+    id: chart_out_label
+
+  - platform: homeassistant
+    entity_id: sensor.claude_usage_week_chart
+    attribute: time_left
+    id: chart_time_left
+
+  - platform: homeassistant
+    entity_id: sensor.claude_usage_week_chart
+    attribute: reset_label
+    id: chart_reset
+
+  - platform: homeassistant
+    entity_id: sensor.claude_usage_week_chart
+    attribute: days
+    id: chart_days
 
 output:
   - platform: gpio
@@ -382,28 +417,31 @@ font:
     size: 22
     id: font_h2
 
-  - file: "fonts/materialdesignicons-webfont.ttf"
-    id: font_mdi
-    size: 16
-    glyphs:
-      # WiFi
-      - "\U000F0928" # mdi-wifi-strength-4
-      - "\U000F0925" # mdi-wifi-strength-3
-      - "\U000F0922" # mdi-wifi-strength-2
-      - "\U000F091F" # mdi-wifi-strength-1
-      - "\U000F092B" # mdi-wifi-strength-alert-outline (very weak)
-      # Battery
-      - "\U000F0079" # mdi-battery-100
-      - "\U000F007A" # mdi-battery-10
-      - "\U000F007B" # mdi-battery-20
-      - "\U000F007C" # mdi-battery-30
-      - "\U000F007D" # mdi-battery-40
-      - "\U000F007E" # mdi-battery-50
-      - "\U000F007F" # mdi-battery-60
-      - "\U000F0080" # mdi-battery-70
-      - "\U000F0081" # mdi-battery-80
-      - "\U000F0082" # mdi-battery-90
-      - "\U000F125E" # mdi-battery-slashed
+  # The chart's fonts. The big % carries only the glyphs it can show; the
+  # strip needs the middle dot, which is not in the default glyph set.
+  - file:
+      type: gfonts
+      family: Montserrat
+      weight: 700
+    size: 30
+    id: font_big
+    glyphs: ["0123456789%-"]
+
+  - file:
+      type: gfonts
+      family: Montserrat
+      weight: 700
+    size: 10
+    id: font_tiny_b
+
+  - file:
+      type: gfonts
+      family: Montserrat
+      weight: 700
+    size: 11
+    id: font_strip
+    glyphsets: [GF_Latin_Kernel]
+    glyphs: ["·"]
 
 # ePaper colour convention: on this display white means no ink (000000) and
 # black means ink (FFFFFF). See https://github.com/esphome/issues/issues/3132
@@ -440,9 +478,7 @@ display:
       const int W = it.get_width();
       const int H = it.get_height();
 
-      bool have_any = (id(session_pct).has_state() && !isnan(id(session_pct).state)) ||
-                      (id(week_pct).has_state()    && !isnan(id(week_pct).state))    ||
-                      (id(fable_pct).has_state()   && !isnan(id(fable_pct).state));
+      const bool have_any = id(week_pct).has_state() && !isnan(id(week_pct).state);
 
       // Faults, most specific first. Each condition gets its OWN wording:
       // only `auth_failed` means the token is genuinely dead, so only that one
@@ -494,109 +530,39 @@ display:
         return;
       }
 
-      // Three rows: label (left) + reset time (small, inline) + % (right),
-      // with a fat progress bar underneath. A value >= 80% renders its %
-      // inverted (white on black) as a glanceable warning.
-      const char* bar_labels[3] = {"Session", "Week - All Models", "Week - Fable"};
-      int   bar_y[3]     = {3, 43, 83};
-      float bar_pct[3]   = {id(session_pct).state, id(week_pct).state, id(fable_pct).state};
-      bool  bar_valid[3] = {
-        id(session_pct).has_state() && !isnan(id(session_pct).state),
-        id(week_pct).has_state()    && !isnan(id(week_pct).state),
-        id(fable_pct).has_state()   && !isnan(id(fable_pct).state)
-      };
-      std::string resets[3] = {id(session_reset).state, id(week_reset).state,
-                               id(fable_reset).state};
+      week_chart::Data d;
+      d.used = (int) lroundf(id(week_pct).state);
+      d.points = id(chart_points).state;
+      d.hour = (id(chart_hour).has_state() && !isnan(id(chart_hour).state))
+                   ? (int) id(chart_hour).state : -1;
+      d.run_out = (id(chart_run_out).has_state() && !isnan(id(chart_run_out).state))
+                      ? id(chart_run_out).state : -1;
+      d.run_out_label = id(chart_out_label).state;
+      d.proj_end = (id(chart_proj_end).has_state() && !isnan(id(chart_proj_end).state))
+                       ? (int) id(chart_proj_end).state : -1;
+      d.time_left = id(chart_time_left).state;
+      d.reset_label = id(chart_reset).state;
+      d.days = id(chart_days).state;
 
-      for (int i = 0; i < 3; i++) {
-        int y = bar_y[i];
-        float pct = bar_valid[i] ? bar_pct[i] : 0.0f;
-        if (pct < 0) pct = 0;
-        if (pct > 100) pct = 100;
-
-        it.printf(2, y, id(font_row), id(colour_black),
-                  TextAlign::TOP_LEFT, "%s", bar_labels[i]);
-
-        // Percent, inverted when >= 80%.
-        char pct_str[8];
-        if (bar_valid[i]) {
-          snprintf(pct_str, sizeof(pct_str), "%d%%", (int) (pct + 0.5f));
-        } else {
-          snprintf(pct_str, sizeof(pct_str), "--");
-        }
-        if (bar_valid[i] && pct >= 80.0f) {
-          int tw = GetTextWidth(&it, id(font_row), "%s", pct_str);
-          it.filled_rectangle(W - 2 - tw - 6, y - 1, tw + 8, 19, id(colour_black));
-          it.printf(W - 5, y, id(font_row), id(colour_white),
-                    TextAlign::TOP_RIGHT, "%s", pct_str);
-        } else {
-          it.printf(W - 2, y, id(font_row), id(colour_black),
-                    TextAlign::TOP_RIGHT, "%s", pct_str);
-        }
-
-        // Reset time inline, small, to the left of the percent column.
-        if (!resets[i].empty() && resets[i] != "unknown" &&
-            resets[i] != "unavailable") {
-          it.printf(W - 52, y + 4, id(font_tiny), id(colour_black),
-                    TextAlign::TOP_RIGHT, "%s", resets[i].c_str());
-        }
-
-        int by = y + 20;
-        int bw = W - 4;
-        it.rectangle(2, by, bw, 11, id(colour_black));
-        if (bar_valid[i]) {
-          int fill = (int) (bw * pct / 100.0f);
-          if (fill > 2) it.filled_rectangle(2, by, fill, 11, id(colour_black));
-        }
+      // The strip says what HA worked out, unless the data behind the chart
+      // is stale: then it says so, inverted, and the chart is the last good one.
+      if (!ha_link) {
+        d.strip = "HA offline · chart may be stale";
+        d.invert_strip = true;
+      } else if (st == "rate_limited") {
+        d.strip = "API rate limited · chart may be stale";
+        d.invert_strip = true;
+      } else if (st == "no_token") {
+        d.strip = "Token not ready · chart may be stale";
+        d.invert_strip = true;
+      } else if (st == "unknown") {
+        d.strip = "No API data · chart may be stale";
+        d.invert_strip = true;
+      } else {
+        d.strip = id(chart_strip).state;
+        d.invert_strip = id(chart_alarm).state == "on";
       }
 
-      // Footer: updated time + HA-link warning (left), wifi + battery (right).
-      if (id(homeassistant_time).now().is_valid()) {
-        it.strftime(2, H - 11, id(font_tiny), id(colour_black),
-                    TextAlign::TOP_LEFT, "Updated %H:%M",
-                    id(homeassistant_time).now());
-      }
-      if (!id(api_status).is_connected()) {
-        it.printf(78, H - 11, id(font_tiny), id(colour_black),
-                  TextAlign::TOP_LEFT, "HA offline - stale!");
-      } else if (id(usage_status).state == "rate_limited") {
-        it.printf(78, H - 11, id(font_tiny), id(colour_black),
-                  TextAlign::TOP_LEFT, "API rate limited - stale");
-      } else if (id(usage_status).state == "no_token") {
-        it.printf(78, H - 11, id(font_tiny), id(colour_black),
-                  TextAlign::TOP_LEFT, "token not ready - stale");
-      } else if (id(usage_status).state == "unknown") {
-        it.printf(78, H - 11, id(font_tiny), id(colour_black),
-                  TextAlign::TOP_LEFT, "no API data - stale");
-      }
-
-      if (id(wifisignal).has_state()) {
-        const char* wifi_icon = "\U000F092B";
-        if (id(wifisignal).state >= -50)      wifi_icon = "\U000F0928";
-        else if (id(wifisignal).state >= -60) wifi_icon = "\U000F0925";
-        else if (id(wifisignal).state >= -75) wifi_icon = "\U000F0922";
-        else if (id(wifisignal).state >= -90) wifi_icon = "\U000F091F";
-        it.print(W, H - 16, id(font_mdi), id(colour_black),
-                 TextAlign::TOP_RIGHT, wifi_icon);
-      }
-
-      // Only draw the battery when a real LiPo is connected (>2.5V). On a
-      // mains build the ADC pin floats near 0V, so draw nothing rather than a
-      // permanent battery-slashed icon.
-      if (id(batt_voltage).has_state() && id(batt_voltage).state > 2.5f &&
-          id(batt_percentage).has_state() && !isnan(id(batt_percentage).state)) {
-        const char* battery_icon = "\U000F125E";
-        float b = id(batt_percentage).state;
-        if (b >= 95)      battery_icon = "\U000F0079";
-        else if (b >= 90) battery_icon = "\U000F0082";
-        else if (b >= 80) battery_icon = "\U000F0081";
-        else if (b >= 70) battery_icon = "\U000F0080";
-        else if (b >= 60) battery_icon = "\U000F007F";
-        else if (b >= 50) battery_icon = "\U000F007E";
-        else if (b >= 40) battery_icon = "\U000F007D";
-        else if (b >= 30) battery_icon = "\U000F007C";
-        else if (b >= 20) battery_icon = "\U000F007B";
-        else if (b >= 10) battery_icon = "\U000F007A";
-        it.print(W - 20, H - 16, id(font_mdi), id(colour_black),
-                 TextAlign::TOP_RIGHT, battery_icon);
-      }
+      week_chart::Fonts f{id(font_big), id(font_row), id(font_tiny),
+                          id(font_tiny_b), id(font_strip)};
+      week_chart::Draw(&it, f, id(colour_black), id(colour_white), d);
