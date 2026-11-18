@@ -2,6 +2,9 @@
 // moment; right, Mon..Sun cumulative usage against an even-pace diagonal, with
 // a dashed projection at the last 24 h's rate and, when that projection hits
 // 100% before the reset, an X and "runs out <when>"; a strip underneath.
+// Fable is the solid black part of the week's hatched area: its share of the
+// week, so it grows only when Fable use does. "■ Fable 4%" under the reset
+// time gives Fable against its OWN limit, the number Claude's app shows.
 //
 // Everything is worked out by Home Assistant (homeassistant/week_chart.yaml);
 // this file only draws. Coordinates are the mockup's, in the 296 x 128
@@ -102,6 +105,9 @@ struct Data {
   std::string days;           // "MTWTFSS"
   std::string strip;          // text for the strip
   bool invert_strip = false;  // black strip = act now
+  int fable = -1;             // Fable % of its own limit, -1 unknown
+  std::string fable_points;   // Fable's hourly history, as points
+  int fable_cap = -1;         // Fable's allowance as % of the week
 };
 
 inline void Draw(esphome::display::Display *it, const Fonts &f,
@@ -122,6 +128,14 @@ inline void Draw(esphome::display::Display *it, const Fonts &f,
   }
   if (!d.reset_label.empty()) {
     it->print(4, 95, f.tiny, ink, TextAlign::BASELINE_LEFT, d.reset_label.c_str());
+  }
+  // In the corner beside the day letters, which was empty. The square is the
+  // legend for the solid slice.
+  if (d.fable >= 0) {
+    it->filled_rectangle(4, 98, 7, 7, ink);
+    it->print(14, 105, f.tiny, ink, TextAlign::BASELINE_LEFT, "Fable");
+    it->printf(14 + TextWidth(it, f.tiny, "Fable "), 105, f.tiny_b, ink,
+               TextAlign::BASELINE_LEFT, "%d%%", d.fable);
   }
 
   // ---- Chart frame ----
@@ -164,6 +178,33 @@ inline void Draw(esphome::display::Display *it, const Fonts &f,
       if (top < 0) continue;
       for (int y = top + 1; y < CY_BASE; y++) {
         if ((x + y) % 3 == 0) it->draw_pixel_at(x, y, ink);
+      }
+    }
+
+    // Fable's share of the week, solid under the hatch. Fable's own % times
+    // its allowance is its size in the week's units; capped at the week's
+    // own value so a poll landing between the two sensors can't poke it
+    // above the curve.
+    if (d.fable >= 0 && d.fable_cap > 0) {
+      std::vector<int> fp = ParsePoints(d.fable_points);
+      if ((int) fp.size() > d.hour + 1) fp.resize(d.hour + 1);
+      int flast = fp.empty() ? -1 : fp.back();
+      while ((int) fp.size() < d.hour + 1) fp.push_back(flast);
+      fp[d.hour] = d.fable;
+      std::vector<float> fw(d.hour + 1, -1.0f);
+      for (int i = 0; i <= d.hour; i++) {
+        if (fp[i] < 0) continue;
+        float w = fp[i] * d.fable_cap / 100.0f;
+        fw[i] = v[i] >= 0 ? std::min(w, (float) v[i]) : w;
+      }
+      for (int i = 0; i < d.hour; i++) {
+        if (fw[i] < 0 || fw[i + 1] < 0) continue;
+        int xa = XH(i), xb = XH(i + 1), ya = YP(fw[i]), yb = YP(fw[i + 1]);
+        for (int x = xa; x <= xb; x++) {
+          float t = xb == xa ? 1.0f : (float) (x - xa) / (xb - xa);
+          int top = (int) lroundf(ya + t * (yb - ya));
+          for (int y = top; y < CY_BASE; y++) it->draw_pixel_at(x, y, ink);
+        }
       }
     }
 

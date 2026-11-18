@@ -28,6 +28,10 @@
 #   time_left       "3d 11h", "11h", "<1h"
 #   reset_label     "Mon 01:00"
 #   days            first letters of the seven days from week_start: "MTWTFSS"
+#   fable_points    Fable's own %, one value per hour, same format as points
+#   fable_cap       Fable's allowance as a % of the weekly limit. The panel
+#                   draws Fable as the solid part of the week's area, so it
+#                   needs Fable in the week's units: Fable % * fable_cap / 100.
 #
 # The rate is the LAST 24 HOURS, not the week's average. Early in the week the
 # average swings wildly (12% in the first 12 h projects to 164%), and a quiet
@@ -38,13 +42,23 @@
 # entities restore their attributes across restarts, which is what makes that
 # safe; a gap (HA down) shows as "-" hours that the ESP bridges.
 #
+# Fable has its own weekly limit, and Fable usage counts towards the week too.
+# The API's weekly_scoped_shares says how they relate: on 2026-11-18 Fable was
+# at 4% of its own limit and 2% of the week, with "allowance_percent_of_weekly":
+# 50. The REST sensors don't carry that field (adding it is a rest: change, and
+# those need a Core restart), so it is the constant FABLE_CAP below. If the
+# panel's solid slice ever looks wrong against the label, check that number
+# first. Fable resets with the week (same resets_at), so it shares week_start.
+#
 # resets_at jitters by milliseconds between polls (.024094 vs .417622 on the
 # same reset), so it is rounded to the hour before anything compares it.
 # ---------------------------------------------------------------------------
 template:
   - triggers:
       - trigger: state
-        entity_id: sensor.claude_usage_week
+        entity_id:
+          - sensor.claude_usage_week
+          - sensor.claude_usage_fable
       - trigger: time_pattern
         minutes: "/1"
       - trigger: homeassistant
@@ -52,6 +66,7 @@ template:
     variables:
       me: sensor.claude_usage_week_chart
       wk: "{{ states('sensor.claude_usage_week') | int(-1) }}"
+      fb: "{{ states('sensor.claude_usage_fable') | int(-1) }}"
       rt: >-
         {%- set t = as_timestamp(state_attr('sensor.claude_usage_week', 'resets_at'), 0) -%}
         {{ ((t / 3600) | round(0) * 3600) | int if t else 0 }}
@@ -68,6 +83,19 @@ template:
           {%- for i in range(h + 1) -%}
             {%- set o = old[i] if i < old | length else '-' -%}
             {%- if i == h and wk >= 0 -%}{%- set o = wk | string -%}{%- endif -%}
+            {%- set ns.out = ns.out + [o] -%}
+          {%- endfor -%}
+          {{ ns.out | join(' ') }}
+        {%- endif -%}
+      fable_points: >-
+        {%- set raw = state_attr(me, 'fable_points') | default('', true) | string -%}
+        {%- if not ws -%}{{ raw }}
+        {%- else -%}
+          {%- set old = raw.split(' ') if raw and (state_attr(me, 'week_start') | int(0)) == ws else [] -%}
+          {%- set ns = namespace(out=[]) -%}
+          {%- for i in range(h + 1) -%}
+            {%- set o = old[i] if i < old | length else '-' -%}
+            {%- if i == h and fb >= 0 -%}{%- set o = fb | string -%}{%- endif -%}
             {%- set ns.out = ns.out + [o] -%}
           {%- endfor -%}
           {{ ns.out | join(' ') }}
@@ -127,3 +155,6 @@ template:
           reset_label: "{{ ((ws + 7 * 86400) | timestamp_custom('%a %H:%M')) if ws else '' }}"
           days: >-
             {%- for d in range(7) -%}{{ ((ws + d * 86400) | timestamp_custom('%a'))[0] }}{%- endfor -%}
+          fable_points: "{{ fable_points }}"
+          # FABLE_CAP: see the header.
+          fable_cap: "50"

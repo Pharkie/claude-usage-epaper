@@ -3,7 +3,9 @@
 # runs out at the last 24 h's rate, and how much a day is left, on a
 # FireBeetle 2 ESP32-C6 + Waveshare 2.90" V2 (B/W) panel. (It showed Session,
 # Week and Fable bars until Anthropic dropped the five-hour limit for Ultra
-# accounts on 2026-10-30; the week is the only limit left.)
+# accounts on 2026-10-30; the week is the only limit left.) Fable, which has
+# its own weekly limit inside the week's, is the solid part of the chart's
+# area, with "Fable 4%" under the reset time (since 2026-11-18).
 # Setup instructions: see README.md in the repo.
 #
 # Mains-powered: no deep sleep. Redraws ONLY when displayed data changes
@@ -197,6 +199,8 @@ script:
               id(chart_out_label).state + "|" + id(chart_time_left).state + "|" +
               id(chart_reset).state + "|" + id(chart_days).state + "|" +
               std::to_string((unsigned) std::hash<std::string>{}(id(chart_points).state)) + "|" +
+              num_of(id(fable_pct)) + "|" + num_of(id(chart_fable_cap)) + "|" +
+              std::to_string((unsigned) std::hash<std::string>{}(id(chart_fable_points).state)) + "|" +
               id(usage_status).state + "|" +
               (id(api_status).is_connected() ? "1" : "0");
   - id: update_screen
@@ -256,6 +260,14 @@ sensor:
     id: week_pct
     internal: false
 
+  # Fable against its own weekly limit. Not a readiness check: the panel
+  # draws without it, and an unavailable Fable only hides the slice.
+  - platform: homeassistant
+    name: "Claude Fable"
+    entity_id: sensor.claude_usage_fable
+    id: fable_pct
+    internal: false
+
   # ---- The week chart, worked out by homeassistant/week_chart.yaml ----
   # Attributes of sensor.claude_usage_week_chart; internal (the default for
   # this platform) because they only matter to the drawing.
@@ -273,6 +285,11 @@ sensor:
     entity_id: sensor.claude_usage_week_chart
     attribute: proj_end
     id: chart_proj_end
+
+  - platform: homeassistant
+    entity_id: sensor.claude_usage_week_chart
+    attribute: fable_cap
+    id: chart_fable_cap
 
   # ---- Battery (kept in case the LiPo is left connected) ----
   - platform: adc
@@ -364,6 +381,12 @@ text_sensor:
     entity_id: sensor.claude_usage_week_chart
     attribute: points
     id: chart_points
+
+  # Fable's hourly history: as points, and internal for the same reason.
+  - platform: homeassistant
+    entity_id: sensor.claude_usage_week_chart
+    attribute: fable_points
+    id: chart_fable_points
 
   - platform: homeassistant
     entity_id: sensor.claude_usage_week_chart
@@ -543,6 +566,11 @@ display:
       d.time_left = id(chart_time_left).state;
       d.reset_label = id(chart_reset).state;
       d.days = id(chart_days).state;
+      d.fable = (id(fable_pct).has_state() && !isnan(id(fable_pct).state))
+                    ? (int) lroundf(id(fable_pct).state) : -1;
+      d.fable_points = id(chart_fable_points).state;
+      d.fable_cap = (id(chart_fable_cap).has_state() && !isnan(id(chart_fable_cap).state))
+                        ? (int) id(chart_fable_cap).state : -1;
 
       // The strip says what HA worked out, unless the data behind the chart
       // is stale: then it says so, inverted, and the chart is the last good one.

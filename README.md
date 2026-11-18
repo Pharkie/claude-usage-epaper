@@ -28,6 +28,10 @@ before Anthropic dropped the five-hour limit for Ultra accounts.
 - A strip underneath: "19% ahead of pace · 9%/day left". It goes black only
   when the projection runs out before the reset, so black means act now.
 - The week's %, the time to reset and the reset moment in a column on the left.
+- Fable, which has its own weekly limit inside the week's, as the solid black
+  part of the shaded area: its share of the week, so it stays a sliver unless
+  you use Fable heavily. "■ Fable 4%" in the bottom-left corner is Fable
+  against its own limit, the number Claude's app shows.
 - Redraws within a minute of Home Assistant's numbers changing (HA polls the API
   every 5 minutes). It only redraws when something actually changed, so the panel
   isn't flashing all day.
@@ -68,7 +72,7 @@ flowchart LR
 Home Assistant polls `https://api.anthropic.com/api/oauth/usage`, the
 undocumented endpoint behind Claude Code's own `/usage` screen, and exposes
 the numbers as sensors. A template sensor (`homeassistant/week_chart.yaml`)
-keeps the week's usage one value per hour and works out the pace, the run-out
+keeps the week's usage (and Fable's) one value per hour and works out the pace, the run-out
 time and the strip text, so the ESP subscribes over the native API and only
 draws.
 
@@ -178,8 +182,12 @@ only the week. The session sensors are still in `rest.yaml` (the session one
 goes unavailable and its reset sensor says "No limit") if your account still
 has the limit and you want to draw it.
 
-If you're adapting it: the per-model row picks the first `weekly_scoped` limit
-on your account (rename the label in the display lambda if it's not Fable). For
+If you're adapting it: the Fable sensor picks the first `weekly_scoped` limit
+on your account (rename the label in `includes/week_chart.h` if it's not
+Fable). The slice's size in the week's units uses `fable_cap` in
+`week_chart.yaml`: Fable's allowance as a % of the week, 50 on this account,
+read from the API's `weekly_scoped_shares[].allowance_percent_of_weekly`.
+Check yours in the same endpoint's response before trusting the slice. For
 another board, change `board`/`variant` and the `internal_led` pin, remove the
 `external_components` adc override, and delete the FireBeetle-2-C6-specific
 battery sensors.
