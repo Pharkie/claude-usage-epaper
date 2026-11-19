@@ -28,10 +28,16 @@
 #   time_left       "3d 11h", "11h", "<1h"
 #   reset_label     "Mon 01:00"
 #   days            first letters of the seven days from week_start: "MTWTFSS"
-#   fable_points    Fable's own %, one value per hour, same format as points
-#   fable_cap       Fable's allowance as a % of the weekly limit. The panel
-#                   draws Fable as the solid part of the week's area, so it
-#                   needs Fable in the week's units: Fable % * fable_cap / 100.
+#   fable_points    Fable's own %, one value per hour, same format as points.
+#                   The raw history, kept so resets can be seen in it.
+#   fable_share     Fable's part of the WEEK's usage, in the week's %, one value
+#                   per hour: what the panel draws as the solid part of the
+#                   week's area. Fable % * fable_cap / 100, carried across the
+#                   resets described below.
+#   fable_cap       Fable's allowance as a % of the weekly limit.
+#   pace_from       hour of the week the even pace starts from: 0, or the hour
+#                   of a reset in the middle of the week (see below). The panel
+#                   draws the pace line from 0% there to 100% at resets_at.
 #
 # The rate is the LAST 24 HOURS, not the week's average. Early in the week the
 # average swings wildly (12% in the first 12 h projects to 164%), and a quiet
@@ -52,6 +58,32 @@
 #
 # resets_at jitters by milliseconds between polls (.024094 vs .417622 on the
 # same reset), so it is rounded to the hour before anything compares it.
+#
+# A week can be reset early, and resets_at does NOT move. On 2026-11-19 the
+# week reached 100% at 00:58 and was reset at 03:13: Week 100% -> 2%, Fable
+# 37% -> 3%, resets_at still Mon 01:00. Before this was handled the strip read
+# "42% under pace" with 93% of the allowance left for 3.6 days, and the
+# projection was flat, because the last 24 h's "rate" reached back across the
+# drop and came out negative. Usage only climbs within a week, so a fall of 5
+# points or more between two readings is a reset, and pace_from is the hour it
+# shows up in. From there the even pace runs from 0% at pace_from to 100% at
+# resets_at, "ahead/under" is measured against that, and the rate never reaches
+# back past the reset: the last 24 h once those are all after it, before that
+# the average since the reset (from 0%), and no projection in its first 6 h.
+# pace_from is worked out from `points` on every render rather than stored, so
+# a restart cannot lose it, and a reading that dips and recovers within the
+# hour leaves no trace. A reset that DOES move resets_at is simply a new week.
+#
+# Fable can be reset on its own too, and the two kinds of reset move Fable's
+# slice differently, which is why HA works out fable_share rather than the
+# panel multiplying Fable's % by the cap:
+#   - Fable reset alone: Fable's % falls to 0, but what Fable used before it
+#     still counts in the week's %, so the slice must NOT fall. The share keeps
+#     the pre-reset Fable % and adds what comes after.
+#   - week reset: the week's % falls to 0 and everything before it stops
+#     counting, so the slice restarts at 0 even if Fable's own % carries on.
+# Both are spotted the same way (a fall of 5 points or more). On 2026-11-19
+# both counters fell in the same poll; the arithmetic is the same either way.
 # ---------------------------------------------------------------------------
 template:
   - triggers:
@@ -65,6 +97,8 @@ template:
         event: start
     variables:
       me: sensor.claude_usage_week_chart
+      # FABLE_CAP: see the header.
+      fcap: 50
       wk: "{{ states('sensor.claude_usage_week') | int(-1) }}"
       fb: "{{ states('sensor.claude_usage_fable') | int(-1) }}"
       rt: >-
@@ -100,17 +134,54 @@ template:
           {%- endfor -%}
           {{ ns.out | join(' ') }}
         {%- endif -%}
+      # The hour of the latest early reset this week, 0 if none. See the header.
+      rs: >-
+        {%- set p = (points | string).split(' ') -%}
+        {%- set ns = namespace(last=-1, at=0) -%}
+        {%- for i in range(p | length) -%}
+          {%- set v = p[i] | int(-1) -%}
+          {%- if v >= 0 -%}
+            {%- if ns.last >= 0 and v <= ns.last - 5 -%}{%- set ns.at = i -%}{%- endif -%}
+            {%- set ns.last = v -%}
+          {%- endif -%}
+        {%- endfor -%}
+        {{ ns.at }}
+      # Fable's part of the week, in the week's %. `cum` is Fable's % with its
+      # own resets undone (each adds the last pre-reset value to `off`); `base`
+      # is `cum` when the week last reset. The week's fall is checked first so
+      # that, when both reset in the same hour, base is the pre-reset cum.
+      fable_share: >-
+        {%- set p = (points | string).split(' ') -%}
+        {%- set f = (fable_points | string).split(' ') -%}
+        {%- set ns = namespace(lw=-1, lf=-1, off=0, cum=0, base=0, out=[]) -%}
+        {%- for i in range(f | length) -%}
+          {%- set w = p[i] | int(-1) if i < p | length else -1 -%}
+          {%- if w >= 0 -%}
+            {%- if ns.lw >= 0 and w <= ns.lw - 5 -%}{%- set ns.base = ns.cum -%}{%- endif -%}
+            {%- set ns.lw = w -%}
+          {%- endif -%}
+          {%- set v = f[i] | int(-1) -%}
+          {%- if v >= 0 -%}
+            {%- if ns.lf >= 0 and v <= ns.lf - 5 -%}{%- set ns.off = ns.off + ns.lf -%}{%- endif -%}
+            {%- set ns.lf = v -%}
+            {%- set ns.cum = v + ns.off -%}
+            {%- set ns.out = ns.out + [((ns.cum - ns.base) * fcap / 100) | round(0) | int] -%}
+          {%- else -%}
+            {%- set ns.out = ns.out + ['-'] -%}
+          {%- endif -%}
+        {%- endfor -%}
+        {{ ns.out | join(' ') }}
       v24: >-
         {%- set p = (points | string).split(' ') -%}
         {%- set ns = namespace(v=-1) -%}
-        {%- for i in range([h - 23, 0] | max) -%}
+        {%- for i in range(rs, [h - 23, rs] | max) -%}
           {%- if p[i] is defined and p[i] != '-' -%}{%- set ns.v = p[i] | int(-1) -%}{%- endif -%}
         {%- endfor -%}
-        {{ ns.v if h >= 24 else -1 }}
+        {{ ns.v if h - 24 >= rs else -1 }}
       rate: >-
         {%- if wk < 0 or hf < 0 -%}-1
         {%- elif v24 >= 0 -%}{{ [(wk - v24) / 24, 0] | max }}
-        {%- elif hf >= 6 -%}{{ wk / hf }}
+        {%- elif hf - rs >= 6 -%}{{ wk / (hf - rs) }}
         {%- else -%}-1{%- endif -%}
       hl: "{{ ((ws + 7 * 86400 - nowts) / 3600) if ws else -1 }}"
       run_out: >-
@@ -122,7 +193,7 @@ template:
         {%- if rate >= 0 and wk >= 0 and hl >= 0 -%}
           {{ ([wk + rate * hl, 100] | min) | round(0) | int }}
         {%- else -%}-1{%- endif -%}
-      ahead: "{{ (wk - hf / 168 * 100) | round(0) | int if wk >= 0 and hf >= 0 else 0 }}"
+      ahead: "{{ (wk - (hf - rs) / (168 - rs) * 100) | round(0) | int if wk >= 0 and hf >= 0 else 0 }}"
     sensor:
       - name: "Claude Usage Week Chart"
         unique_id: claude_usage_week_chart
@@ -156,5 +227,6 @@ template:
           days: >-
             {%- for d in range(7) -%}{{ ((ws + d * 86400) | timestamp_custom('%a'))[0] }}{%- endfor -%}
           fable_points: "{{ fable_points }}"
-          # FABLE_CAP: see the header.
-          fable_cap: "50"
+          fable_share: "{{ fable_share }}"
+          fable_cap: "{{ fcap }}"
+          pace_from: "{{ rs }}"

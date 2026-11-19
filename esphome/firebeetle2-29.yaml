@@ -199,8 +199,8 @@ script:
               id(chart_out_label).state + "|" + id(chart_time_left).state + "|" +
               id(chart_reset).state + "|" + id(chart_days).state + "|" +
               std::to_string((unsigned) std::hash<std::string>{}(id(chart_points).state)) + "|" +
-              num_of(id(fable_pct)) + "|" + num_of(id(chart_fable_cap)) + "|" +
-              std::to_string((unsigned) std::hash<std::string>{}(id(chart_fable_points).state)) + "|" +
+              num_of(id(fable_pct)) + "|" + num_of(id(chart_pace_from)) + "|" +
+              std::to_string((unsigned) std::hash<std::string>{}(id(chart_fable_share).state)) + "|" +
               id(usage_status).state + "|" +
               (id(api_status).is_connected() ? "1" : "0");
   - id: update_screen
@@ -286,10 +286,12 @@ sensor:
     attribute: proj_end
     id: chart_proj_end
 
+  # Where the even pace starts: 0, or the hour of a reset in the middle of the
+  # week (a handed-out reset zeroes the week without moving the Monday reset).
   - platform: homeassistant
     entity_id: sensor.claude_usage_week_chart
-    attribute: fable_cap
-    id: chart_fable_cap
+    attribute: pace_from
+    id: chart_pace_from
 
   # ---- Battery (kept in case the LiPo is left connected) ----
   - platform: adc
@@ -382,11 +384,12 @@ text_sensor:
     attribute: points
     id: chart_points
 
-  # Fable's hourly history: as points, and internal for the same reason.
+  # Fable's part of the week, hourly, in the week's %: as points, and internal
+  # for the same reason. HA works it out across Fable-only and week resets.
   - platform: homeassistant
     entity_id: sensor.claude_usage_week_chart
-    attribute: fable_points
-    id: chart_fable_points
+    attribute: fable_share
+    id: chart_fable_share
 
   - platform: homeassistant
     entity_id: sensor.claude_usage_week_chart
@@ -568,9 +571,9 @@ display:
       d.days = id(chart_days).state;
       d.fable = (id(fable_pct).has_state() && !isnan(id(fable_pct).state))
                     ? (int) lroundf(id(fable_pct).state) : -1;
-      d.fable_points = id(chart_fable_points).state;
-      d.fable_cap = (id(chart_fable_cap).has_state() && !isnan(id(chart_fable_cap).state))
-                        ? (int) id(chart_fable_cap).state : -1;
+      d.fable_share = id(chart_fable_share).state;
+      d.pace_from = (id(chart_pace_from).has_state() && !isnan(id(chart_pace_from).state))
+                        ? (int) id(chart_pace_from).state : 0;
 
       // The strip says what HA worked out, unless the data behind the chart
       // is stale: then it says so, inverted, and the chart is the last good one.

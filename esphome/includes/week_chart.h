@@ -5,6 +5,8 @@
 // Fable is the solid black part of the week's hatched area: its share of the
 // week, so it grows only when Fable use does. "■ Fable 4%" under the reset
 // time gives Fable against its OWN limit, the number Claude's app shows.
+// A handed-out reset zeroes the week (or Fable) without moving the Monday
+// reset; HA spots it, and the pace line then starts from it (pace_from).
 //
 // Everything is worked out by Home Assistant (homeassistant/week_chart.yaml);
 // this file only draws. Coordinates are the mockup's, in the 296 x 128
@@ -106,14 +108,20 @@ struct Data {
   std::string strip;          // text for the strip
   bool invert_strip = false;  // black strip = act now
   int fable = -1;             // Fable % of its own limit, -1 unknown
-  std::string fable_points;   // Fable's hourly history, as points
-  int fable_cap = -1;         // Fable's allowance as % of the week
+  std::string fable_share;    // Fable's part of the week, in the week's %,
+                              // hourly, as points (HA carries it across resets)
+  int pace_from = 0;          // hour the even pace starts from: 0, or the hour
+                              // of a reset in the middle of the week
 };
 
 inline void Draw(esphome::display::Display *it, const Fonts &f,
                  esphome::Color ink, esphome::Color paper, const Data &d) {
   using esphome::display::TextAlign;
   const int W = it->get_width();
+  // An early reset leaves resets_at where it was, so the even pace restarts
+  // from 0% at the reset rather than at the week's start. The old week's climb
+  // stays drawn to the left of it, as history.
+  const int pf = std::min(std::max(d.pace_from, 0), 167);
 
   // ---- Left column ----
   it->print(4, 13, f.tiny, ink, TextAlign::BASELINE_LEFT, "Week");
@@ -181,21 +189,19 @@ inline void Draw(esphome::display::Display *it, const Fonts &f,
       }
     }
 
-    // Fable's share of the week, solid under the hatch. Fable's own % times
-    // its allowance is its size in the week's units; capped at the week's
-    // own value so a poll landing between the two sensors can't poke it
-    // above the curve.
-    if (d.fable >= 0 && d.fable_cap > 0) {
-      std::vector<int> fp = ParsePoints(d.fable_points);
+    // Fable's share of the week, solid under the hatch. HA works it out in
+    // the week's units, across Fable-only and week resets (week_chart.yaml);
+    // capped at the week's own value so a poll landing between the two
+    // sensors can't poke it above the curve.
+    if (d.fable >= 0 && !d.fable_share.empty()) {
+      std::vector<int> fp = ParsePoints(d.fable_share);
       if ((int) fp.size() > d.hour + 1) fp.resize(d.hour + 1);
       int flast = fp.empty() ? -1 : fp.back();
       while ((int) fp.size() < d.hour + 1) fp.push_back(flast);
-      fp[d.hour] = d.fable;
       std::vector<float> fw(d.hour + 1, -1.0f);
       for (int i = 0; i <= d.hour; i++) {
         if (fp[i] < 0) continue;
-        float w = fp[i] * d.fable_cap / 100.0f;
-        fw[i] = v[i] >= 0 ? std::min(w, (float) v[i]) : w;
+        fw[i] = v[i] >= 0 ? std::min((float) fp[i], (float) v[i]) : (float) fp[i];
       }
       for (int i = 0; i < d.hour; i++) {
         if (fw[i] < 0 || fw[i + 1] < 0) continue;
@@ -208,8 +214,8 @@ inline void Draw(esphome::display::Display *it, const Fonts &f,
       }
     }
 
-    // Even pace: 0% at the week's start to 100% at the reset.
-    PatternLine(it, CX0, CY_BASE, CX1, CY_TOP, ink, 3, 2, 1);
+    // Even pace: 0% at the week's start (or an early reset) to 100% at the reset.
+    PatternLine(it, XH(pf), CY_BASE, CX1, CY_TOP, ink, 3, 2, 1);
 
     for (int i = 0; i < d.hour; i++) {
       if (v[i] < 0 || v[i + 1] < 0) continue;
@@ -220,7 +226,7 @@ inline void Draw(esphome::display::Display *it, const Fonts &f,
     ny = YP(d.used);
     for (int y = CY_TOP; y <= CY_BASE; y += 2) it->draw_pixel_at(nx, y, ink);
   } else {
-    PatternLine(it, CX0, CY_BASE, CX1, CY_TOP, ink, 3, 2, 1);
+    PatternLine(it, XH(pf), CY_BASE, CX1, CY_TOP, ink, 3, 2, 1);
   }
 
   // ---- Projection, and the run-out marker when it lands before the reset ----

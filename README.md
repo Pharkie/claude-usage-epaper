@@ -32,6 +32,12 @@ before Anthropic dropped the five-hour limit for Ultra accounts.
   part of the shaded area: its share of the week, so it stays a sliver unless
   you use Fable heavily. "■ Fable 4%" in the bottom-left corner is Fable
   against its own limit, the number Claude's app shows.
+- Early resets handled. A reset Anthropic hands out zeroes the week's counter
+  but leaves the regular reset where it was. The curve then drops to zero and
+  climbs again, and the pace line, the projection and the strip restart from
+  the drop. Fable can be reset on its own too. Its slice keeps what Fable
+  already used, because that still counts in the week, and starts again from
+  zero only when the week itself is reset.
 - Redraws within a minute of Home Assistant's numbers changing (HA polls the API
   every 5 minutes). It only redraws when something actually changed, so the panel
   isn't flashing all day.
@@ -184,7 +190,7 @@ has the limit and you want to draw it.
 
 If you're adapting it: the Fable sensor picks the first `weekly_scoped` limit
 on your account (rename the label in `includes/week_chart.h` if it's not
-Fable). The slice's size in the week's units uses `fable_cap` in
+Fable). The slice's size in the week's units uses `fcap` in
 `week_chart.yaml`: Fable's allowance as a % of the week, 50 on this account,
 read from the API's `weekly_scoped_shares[].allowance_percent_of_weekly`.
 Check yours in the same endpoint's response before trusting the slice. For
